@@ -1,0 +1,2498 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Furui - 物件ふるい分けツール</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <style>
+    :root {
+      --bg-primary: #fafaf9;
+      --bg-secondary: #ffffff;
+      --bg-tertiary: #f5f5f4;
+      --text-primary: #1c1917;
+      --text-secondary: #57534e;
+      --text-muted: #a8a29e;
+      --border: #e7e5e4;
+      --border-strong: #d6d3d1;
+      
+      --accent: #0d9488;
+      --accent-soft: #ccfbf1;
+      --candidate: #16a34a;
+      --candidate-bg: #dcfce7;
+      --maybe: #ca8a04;
+      --maybe-bg: #fef9c3;
+      --excluded: #78716c;
+      --excluded-bg: #f5f5f4;
+      
+      --radius: 6px;
+      --radius-lg: 10px;
+      --shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
+      --shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+      --shadow-lg: 0 4px 12px rgba(0,0,0,0.08);
+      
+      --font: 'Zen Kaku Gothic New', -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: var(--font);
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+
+    .header {
+      background: var(--bg-secondary);
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .header-inner {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 0 24px;
+      height: 60px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .logo {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--text-primary);
+      text-decoration: none;
+      letter-spacing: -0.02em;
+    }
+
+    .logo span { color: var(--accent); }
+
+    .nav { display: flex; gap: 4px; }
+
+    .nav-btn {
+      padding: 8px 16px;
+      border: none;
+      background: transparent;
+      font-family: var(--font);
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      border-radius: var(--radius);
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .nav-btn:hover { background: var(--bg-tertiary); color: var(--text-primary); }
+    .nav-btn.active { background: var(--text-primary); color: var(--bg-secondary); }
+
+    .header-actions { display: flex; align-items: center; gap: 16px; }
+
+    .count-badge {
+      font-size: 13px;
+      color: var(--text-secondary);
+      display: flex;
+      gap: 12px;
+    }
+
+    .count-badge .item { display: flex; align-items: center; gap: 4px; }
+    .count-badge strong { font-weight: 700; }
+    .count-badge .accent { color: var(--accent); }
+    .count-badge .candidate-count { color: var(--candidate); }
+
+    .view { display: none; }
+    .view.active { display: block; }
+
+    .landing {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 60px 24px;
+    }
+
+    .landing-title {
+      font-size: clamp(28px, 5vw, 40px);
+      font-weight: 700;
+      line-height: 1.3;
+      margin-bottom: 12px;
+      letter-spacing: -0.02em;
+    }
+
+    .landing-title em { font-style: normal; color: var(--accent); }
+
+    .landing-desc {
+      font-size: 16px;
+      color: var(--text-secondary);
+      margin-bottom: 40px;
+      max-width: 540px;
+    }
+
+    .search-card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+    }
+
+    .search-section {
+      padding: 24px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .search-section:last-child { border-bottom: none; }
+
+    .search-section-title {
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .search-section-title svg { width: 16px; height: 16px; }
+
+    .search-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+    }
+
+    .form-group { display: flex; flex-direction: column; gap: 8px; }
+    .form-group.full { grid-column: 1 / -1; }
+
+    .form-label { font-size: 13px; font-weight: 500; color: var(--text-secondary); }
+
+    .form-input, .form-select {
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font-family: var(--font);
+      font-size: 14px;
+      color: var(--text-primary);
+      background: var(--bg-secondary);
+      transition: border-color 0.15s ease;
+    }
+
+    .form-input:focus, .form-select:focus { outline: none; border-color: var(--accent); }
+    .form-input::placeholder { color: var(--text-muted); }
+
+    .form-select {
+      padding-right: 32px;
+      cursor: pointer;
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2378716c' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 8px center;
+    }
+
+    .range-group { display: flex; align-items: center; gap: 8px; }
+    .range-group .form-select, .range-group .form-input { flex: 1; }
+    .range-separator { color: var(--text-muted); font-size: 13px; }
+
+    .tag-group { display: flex; flex-wrap: wrap; gap: 8px; }
+    .tag-item { position: relative; }
+    .tag-item input { position: absolute; opacity: 0; cursor: pointer; }
+
+    .tag-label {
+      display: block;
+      padding: 8px 14px;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      white-space: nowrap;
+    }
+
+    .tag-item input:checked + .tag-label {
+      background: var(--text-primary);
+      border-color: var(--text-primary);
+      color: var(--bg-secondary);
+    }
+
+    .tag-label:hover { border-color: var(--text-secondary); }
+
+    .accordion { border-top: 1px solid var(--border); }
+
+    .accordion-trigger {
+      width: 100%;
+      padding: 16px 24px;
+      background: var(--bg-tertiary);
+      border: none;
+      font-family: var(--font);
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      transition: all 0.15s ease;
+    }
+
+    .accordion-trigger:hover { background: var(--border); }
+    .accordion-trigger svg { width: 18px; height: 18px; transition: transform 0.2s ease; }
+    .accordion-trigger.open svg { transform: rotate(180deg); }
+
+    .accordion-content {
+      display: none;
+      padding: 24px;
+      background: var(--bg-secondary);
+    }
+
+    .accordion-content.open { display: block; }
+
+    .feature-category { margin-bottom: 20px; }
+    .feature-category:last-child { margin-bottom: 0; }
+    .feature-category-title { font-size: 12px; font-weight: 500; color: var(--text-muted); margin-bottom: 10px; }
+
+    .search-actions {
+      padding: 24px;
+      background: var(--bg-tertiary);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .search-hint { font-size: 13px; color: var(--text-muted); }
+    .search-buttons { display: flex; gap: 12px; }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 12px 24px;
+      border: none;
+      border-radius: var(--radius);
+      font-family: var(--font);
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .btn svg { width: 16px; height: 16px; }
+    .btn-primary { background: var(--text-primary); color: var(--bg-secondary); }
+    .btn-primary:hover { background: #292524; }
+    .btn-secondary { background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border); }
+    .btn-secondary:hover { background: var(--border); }
+
+    .features {
+      margin-top: 48px;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 20px;
+    }
+
+    .feature {
+      padding: 20px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+    }
+
+    .feature-icon {
+      width: 36px;
+      height: 36px;
+      background: var(--bg-tertiary);
+      border-radius: var(--radius);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 12px;
+    }
+
+    .feature-icon svg { width: 18px; height: 18px; color: var(--text-secondary); }
+    .feature h3 { font-size: 14px; font-weight: 700; margin-bottom: 6px; }
+    .feature p { font-size: 13px; color: var(--text-secondary); line-height: 1.5; }
+
+    .results-view { display: none; max-width: 1400px; margin: 0 auto; }
+    .results-view.active { display: flex; }
+
+    .sidebar {
+      width: 300px;
+      flex-shrink: 0;
+      background: var(--bg-secondary);
+      border-right: 1px solid var(--border);
+      height: calc(100vh - 60px);
+      position: sticky;
+      top: 60px;
+      overflow-y: auto;
+    }
+
+    .sidebar-header {
+      padding: 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .sidebar-title { font-size: 14px; font-weight: 700; }
+
+    .edit-search-btn {
+      font-size: 12px;
+      color: var(--accent);
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-family: var(--font);
+      font-weight: 500;
+    }
+
+    .edit-search-btn:hover { text-decoration: underline; }
+
+    .sidebar-content { padding: 20px; }
+    .filter-section { margin-bottom: 24px; }
+
+    .filter-title {
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin-bottom: 12px;
+    }
+
+    .filter-group { margin-bottom: 16px; }
+
+    .filter-label {
+      font-size: 13px;
+      font-weight: 500;
+      margin-bottom: 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .filter-value { font-weight: 400; color: var(--accent); font-size: 13px; }
+
+    .range-slider {
+      width: 100%;
+      height: 4px;
+      -webkit-appearance: none;
+      background: var(--border);
+      border-radius: 2px;
+      outline: none;
+    }
+
+    .range-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 18px;
+      height: 18px;
+      background: var(--bg-secondary);
+      border: 2px solid var(--text-primary);
+      border-radius: 50%;
+      cursor: pointer;
+      transition: transform 0.1s ease;
+    }
+
+    .range-slider::-webkit-slider-thumb:hover { transform: scale(1.1); }
+
+    .checkbox-group { display: flex; flex-wrap: wrap; gap: 6px; }
+    .checkbox-item { position: relative; }
+    .checkbox-item input { position: absolute; opacity: 0; cursor: pointer; }
+
+    .checkbox-label {
+      display: block;
+      padding: 6px 10px;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .checkbox-item input:checked + .checkbox-label {
+      background: var(--text-primary);
+      border-color: var(--text-primary);
+      color: var(--bg-secondary);
+    }
+
+    .filter-result {
+      padding: 16px;
+      background: var(--bg-tertiary);
+      border-radius: var(--radius);
+      text-align: center;
+      margin-top: 20px;
+    }
+
+    .filter-result-count { font-size: 32px; font-weight: 700; color: var(--accent); line-height: 1; }
+    .filter-result-label { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+
+    .reset-btn {
+      width: 100%;
+      margin-top: 12px;
+      padding: 10px;
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font-family: var(--font);
+      font-size: 13px;
+      color: var(--text-secondary);
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .reset-btn:hover { background: var(--bg-tertiary); color: var(--text-primary); }
+
+    .main-content { flex: 1; padding: 20px 24px; min-height: calc(100vh - 60px); }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+      gap: 16px;
+    }
+
+    .toolbar-left { display: flex; align-items: center; gap: 12px; }
+
+    .search-status {
+      font-size: 13px;
+      color: var(--text-secondary);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .search-status .loading {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .sort-select {
+      padding: 8px 32px 8px 12px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font-family: var(--font);
+      font-size: 13px;
+      color: var(--text-primary);
+      cursor: pointer;
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2378716c' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 8px center;
+    }
+
+    .view-toggle {
+      display: flex;
+      background: var(--bg-tertiary);
+      border-radius: var(--radius);
+      padding: 4px;
+    }
+
+    .view-toggle-btn {
+      padding: 6px 10px;
+      border: none;
+      background: transparent;
+      border-radius: 4px;
+      cursor: pointer;
+      color: var(--text-muted);
+      transition: all 0.15s ease;
+    }
+
+    .view-toggle-btn.active {
+      background: var(--bg-secondary);
+      color: var(--text-primary);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .view-toggle-btn svg { width: 16px; height: 16px; display: block; }
+
+    .property-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 16px;
+    }
+
+    .property-card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      transition: all 0.2s ease;
+    }
+
+    .property-card:hover { box-shadow: var(--shadow-lg); border-color: var(--border-strong); }
+    .property-card.status-candidate { border-left: 3px solid var(--candidate); }
+    .property-card.status-maybe { border-left: 3px solid var(--maybe); }
+    .property-card.status-excluded { opacity: 0.5; }
+
+    .property-image {
+      height: 160px;
+      background: var(--bg-tertiary);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .property-image img { width: 100%; height: 100%; object-fit: cover; }
+
+    .property-score {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: var(--bg-secondary);
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 700;
+      box-shadow: var(--shadow);
+    }
+
+    .property-score.high { color: var(--candidate); }
+    .property-score.mid { color: var(--maybe); }
+
+    .property-badges { position: absolute; top: 10px; left: 10px; display: flex; gap: 6px; }
+
+    .property-badge {
+      background: var(--text-primary);
+      color: var(--bg-secondary);
+      font-size: 10px;
+      font-weight: 700;
+      padding: 4px 8px;
+      border-radius: 4px;
+    }
+
+    .property-badge.new { background: var(--candidate); }
+
+    .property-body { padding: 14px; }
+    .property-price { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }
+    .property-price small { font-size: 13px; font-weight: 400; color: var(--text-secondary); }
+    .property-price .mgmt { font-size: 12px; font-weight: 400; color: var(--text-muted); margin-left: 6px; }
+
+    .property-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 8px;
+      font-size: 13px;
+      color: var(--text-secondary);
+    }
+
+    .property-meta span { display: flex; align-items: center; gap: 4px; }
+    .property-meta svg { width: 14px; height: 14px; color: var(--text-muted); }
+
+    .property-location {
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid var(--border);
+      font-size: 13px;
+      color: var(--text-secondary);
+    }
+
+    .property-location strong { color: var(--text-primary); font-weight: 500; }
+
+    .property-features { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
+
+    .property-feature-tag {
+      font-size: 11px;
+      padding: 3px 8px;
+      background: var(--bg-tertiary);
+      border-radius: 4px;
+      color: var(--text-secondary);
+    }
+
+    .property-actions { display: flex; gap: 6px; margin-top: 12px; }
+
+    .status-btn {
+      flex: 1;
+      padding: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg-secondary);
+      border-radius: var(--radius);
+      font-family: var(--font);
+      font-size: 11px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+    }
+
+    .status-btn svg { width: 14px; height: 14px; }
+    .status-btn.candidate:hover, .status-btn.candidate.active { background: var(--candidate-bg); border-color: var(--candidate); color: var(--candidate); }
+    .status-btn.maybe:hover, .status-btn.maybe.active { background: var(--maybe-bg); border-color: var(--maybe); color: var(--maybe); }
+    .status-btn.exclude:hover, .status-btn.exclude.active { background: var(--excluded-bg); border-color: var(--excluded); color: var(--excluded); }
+
+    .external-link {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      width: 100%;
+      padding: 10px;
+      margin-top: 8px;
+      background: var(--bg-tertiary);
+      border: none;
+      border-radius: var(--radius);
+      font-family: var(--font);
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      text-decoration: none;
+      transition: all 0.15s ease;
+    }
+
+    .external-link:hover { background: var(--text-primary); color: var(--bg-secondary); }
+    .external-link svg { width: 14px; height: 14px; }
+
+    /* Report Button */
+    .property-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 8px;
+    }
+
+    .report-btn {
+      padding: 6px 10px;
+      border: 1px solid var(--border);
+      background: transparent;
+      font-family: var(--font);
+      font-size: 11px;
+      color: var(--text-muted);
+      border-radius: var(--radius);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      transition: all 0.15s ease;
+      flex-shrink: 0;
+    }
+
+    .report-btn:hover {
+      border-color: var(--text-secondary);
+      color: var(--text-secondary);
+    }
+
+    .report-btn svg {
+      width: 12px;
+      height: 12px;
+    }
+
+    /* Report Modal */
+    .report-modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.5);
+      z-index: 2000;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .report-modal-backdrop.open {
+      display: flex;
+    }
+
+    .report-modal {
+      background: var(--bg-secondary);
+      border-radius: var(--radius-lg);
+      width: 100%;
+      max-width: 480px;
+      max-height: 90vh;
+      overflow-y: auto;
+      box-shadow: var(--shadow-lg);
+    }
+
+    .report-modal-header {
+      padding: 20px 24px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .report-modal-title {
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    .report-modal-close {
+      width: 32px;
+      height: 32px;
+      border: none;
+      background: var(--bg-tertiary);
+      border-radius: 50%;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .report-modal-close svg {
+      width: 16px;
+      height: 16px;
+      color: var(--text-secondary);
+    }
+
+    .report-modal-body {
+      padding: 24px;
+    }
+
+    .report-property-info {
+      background: var(--bg-tertiary);
+      padding: 12px 16px;
+      border-radius: var(--radius);
+      margin-bottom: 20px;
+      font-size: 13px;
+    }
+
+    .report-property-name {
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+    .report-property-address {
+      color: var(--text-muted);
+      font-size: 12px;
+    }
+
+    .report-type-group {
+      margin-bottom: 20px;
+    }
+
+    .report-type-label {
+      font-size: 13px;
+      font-weight: 500;
+      margin-bottom: 10px;
+      display: block;
+    }
+
+    .report-type-options {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .report-type-option {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+    }
+
+    .report-type-option input {
+      width: 16px;
+      height: 16px;
+      accent-color: var(--accent);
+    }
+
+    .report-type-option span {
+      font-size: 13px;
+    }
+
+    .report-field {
+      margin-bottom: 16px;
+    }
+
+    .report-field label {
+      font-size: 13px;
+      font-weight: 500;
+      margin-bottom: 8px;
+      display: block;
+    }
+
+    .report-field textarea {
+      width: 100%;
+      min-height: 100px;
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font-family: var(--font);
+      font-size: 14px;
+      resize: vertical;
+      background: var(--bg-primary);
+    }
+
+    .report-field textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+
+    .report-field textarea::placeholder {
+      color: var(--text-muted);
+    }
+
+    .report-modal-footer {
+      padding: 16px 24px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: flex-end;
+      gap: 12px;
+    }
+
+    .report-submit-btn {
+      padding: 10px 20px;
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: var(--radius);
+      font-family: var(--font);
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s ease;
+    }
+
+    .report-submit-btn:hover {
+      background: var(--accent-hover);
+    }
+
+    .report-cancel-btn {
+      padding: 10px 20px;
+      background: transparent;
+      color: var(--text-secondary);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font-family: var(--font);
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .report-cancel-btn:hover {
+      background: var(--bg-tertiary);
+    }
+
+    .report-success {
+      text-align: center;
+      padding: 40px 24px;
+    }
+
+    .report-success-icon {
+      width: 56px;
+      height: 56px;
+      background: rgba(16, 185, 129, 0.1);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 16px;
+    }
+
+    .report-success-icon svg {
+      width: 28px;
+      height: 28px;
+      color: var(--candidate);
+    }
+
+    .report-success-title {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+
+    .report-success-text {
+      font-size: 13px;
+      color: var(--text-secondary);
+    }
+
+    .compare-view { display: none; max-width: 1400px; margin: 0 auto; padding: 24px; }
+    .compare-view.active { display: block; }
+
+    .compare-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+    .compare-title { font-size: 20px; font-weight: 700; }
+    .compare-title span { color: var(--candidate); }
+
+    .compare-tabs {
+      display: flex;
+      gap: 4px;
+      background: var(--bg-tertiary);
+      padding: 4px;
+      border-radius: var(--radius);
+    }
+
+    .compare-tab {
+      padding: 8px 16px;
+      border: none;
+      background: transparent;
+      font-family: var(--font);
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .compare-tab.active { background: var(--bg-secondary); color: var(--text-primary); box-shadow: var(--shadow-sm); }
+
+    .compare-table {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+    }
+
+    .compare-table table { width: 100%; border-collapse: collapse; }
+    .compare-table th, .compare-table td { padding: 14px 16px; text-align: left; border-bottom: 1px solid var(--border); }
+
+    .compare-table th {
+      background: var(--bg-tertiary);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+    }
+
+    .compare-table tr:last-child td { border-bottom: none; }
+    .compare-table tr:hover td { background: var(--bg-tertiary); }
+
+    .compare-property { display: flex; align-items: center; gap: 12px; }
+    .compare-property-img { width: 64px; height: 48px; border-radius: 4px; background: var(--bg-tertiary); object-fit: cover; }
+    .compare-property-name { font-weight: 500; font-size: 14px; }
+    .compare-property-address { font-size: 12px; color: var(--text-muted); }
+    .compare-value { font-size: 14px; }
+    .compare-value.highlight { font-weight: 700; color: var(--accent); }
+
+    .compare-score {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 8px;
+      background: var(--candidate-bg);
+      color: var(--candidate);
+      border-radius: 4px;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    @media (max-width: 1024px) {
+      .sidebar { display: none; }
+      .results-view.active { display: block; }
+      .mobile-filter-toggle { display: flex !important; }
+    }
+
+    @media (max-width: 768px) {
+      .header-inner { padding: 0 16px; }
+      .nav { display: none; }
+      .mobile-nav { display: flex !important; }
+      .landing { padding: 32px 16px; }
+      .features { grid-template-columns: 1fr; gap: 12px; }
+      .search-row { grid-template-columns: 1fr; }
+      .search-actions { flex-direction: column; align-items: stretch; }
+      .search-hint { text-align: center; }
+      .search-buttons { flex-direction: column; }
+      .main-content { padding: 16px; }
+      .property-grid { grid-template-columns: 1fr; }
+      .toolbar { flex-direction: column; align-items: stretch; }
+      .toolbar-left { justify-content: space-between; }
+      .compare-table { overflow-x: auto; }
+      .compare-table table { min-width: 900px; }
+      .count-badge { display: none; }
+    }
+
+    .mobile-filter-toggle {
+      display: none;
+      align-items: center;
+      gap: 6px;
+      padding: 10px 16px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font-family: var(--font);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+
+    .mobile-filter-toggle svg { width: 16px; height: 16px; }
+
+    .mobile-nav {
+      display: none;
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: var(--bg-secondary);
+      border-top: 1px solid var(--border);
+      padding: 8px 16px;
+      z-index: 100;
+    }
+
+    .mobile-nav-inner { display: flex; justify-content: space-around; }
+
+    .mobile-nav-btn {
+      flex: 1;
+      padding: 10px;
+      border: none;
+      background: transparent;
+      font-family: var(--font);
+      font-size: 12px;
+      color: var(--text-secondary);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      cursor: pointer;
+    }
+
+    .mobile-nav-btn.active { color: var(--accent); }
+    .mobile-nav-btn svg { width: 20px; height: 20px; }
+
+    .mobile-filter-sheet {
+      display: none;
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      top: 0;
+      z-index: 200;
+    }
+
+    .mobile-filter-sheet.open { display: block; }
+    .mobile-filter-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.4); }
+
+    .mobile-filter-content {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: var(--bg-secondary);
+      border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+      padding: 24px;
+      max-height: 85vh;
+      overflow-y: auto;
+    }
+
+    .mobile-filter-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+    .mobile-filter-title { font-size: 18px; font-weight: 700; }
+
+    .mobile-filter-close {
+      width: 32px;
+      height: 32px;
+      border: none;
+      background: var(--bg-tertiary);
+      border-radius: 50%;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .mobile-filter-close svg { width: 18px; height: 18px; color: var(--text-secondary); }
+    .mobile-filter-apply { width: 100%; margin-top: 24px; }
+    body.has-mobile-nav { padding-bottom: 72px; }
+
+    /* Map Styles */
+    .map-container {
+      position: relative;
+      height: calc(100vh - 140px);
+      min-height: 500px;
+    }
+
+    #propertyMap {
+      width: 100%;
+      height: 100%;
+      border-radius: var(--radius-lg);
+      z-index: 1;
+    }
+
+    .map-property-list {
+      position: absolute;
+      top: 16px;
+      right: 16px;
+      width: 320px;
+      max-height: calc(100% - 32px);
+      background: var(--bg-secondary);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-lg);
+      z-index: 1000;
+      display: none;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .map-property-list.active {
+      display: flex;
+    }
+
+    .map-property-list-header {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-shrink: 0;
+    }
+
+    .map-property-count {
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .map-list-close {
+      width: 28px;
+      height: 28px;
+      border: none;
+      background: var(--bg-tertiary);
+      border-radius: 50%;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .map-list-close svg {
+      width: 14px;
+      height: 14px;
+      color: var(--text-secondary);
+    }
+
+    .map-property-items {
+      overflow-y: auto;
+      flex: 1;
+    }
+
+    .map-property-item {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      transition: background 0.15s ease;
+    }
+
+    .map-property-item:hover {
+      background: var(--bg-tertiary);
+    }
+
+    .map-property-item:last-child {
+      border-bottom: none;
+    }
+
+    .map-property-item-price {
+      font-size: 16px;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+
+    .map-property-item-info {
+      font-size: 12px;
+      color: var(--text-secondary);
+      display: flex;
+      gap: 8px;
+    }
+
+    .map-property-item-location {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    /* Leaflet Custom Marker */
+    .custom-marker {
+      background: var(--text-primary);
+      color: white;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 700;
+      font-family: var(--font);
+      white-space: nowrap;
+      box-shadow: var(--shadow);
+      border: 2px solid white;
+    }
+
+    .custom-marker.candidate {
+      background: var(--candidate);
+    }
+
+    .custom-marker.maybe {
+      background: var(--maybe);
+    }
+
+    .custom-marker.excluded {
+      background: var(--excluded);
+    }
+
+    .custom-marker.active {
+      transform: scale(1.15);
+      z-index: 1000 !important;
+    }
+
+    .leaflet-popup-content-wrapper {
+      border-radius: var(--radius-lg);
+      padding: 0;
+      overflow: hidden;
+    }
+
+    .leaflet-popup-content {
+      margin: 0;
+      min-width: 240px;
+    }
+
+    .map-popup {
+      font-family: var(--font);
+    }
+
+    .map-popup-image {
+      width: 100%;
+      height: 120px;
+      object-fit: cover;
+    }
+
+    .map-popup-body {
+      padding: 12px;
+    }
+
+    .map-popup-price {
+      font-size: 18px;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+
+    .map-popup-price small {
+      font-size: 12px;
+      font-weight: 400;
+      color: var(--text-secondary);
+    }
+
+    .map-popup-meta {
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin-bottom: 8px;
+    }
+
+    .map-popup-location {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-bottom: 10px;
+    }
+
+    .map-popup-link {
+      display: block;
+      text-align: center;
+      padding: 8px;
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
+      text-decoration: none;
+      font-size: 12px;
+      font-weight: 500;
+      border-radius: var(--radius);
+      transition: background 0.15s ease;
+    }
+
+    .map-popup-link:hover {
+      background: var(--text-primary);
+      color: white;
+    }
+
+    @media (max-width: 768px) {
+      .map-container {
+        height: calc(100vh - 200px);
+      }
+
+      .map-property-list {
+        position: fixed;
+        top: auto;
+        bottom: 80px;
+        left: 16px;
+        right: 16px;
+        width: auto;
+        max-height: 50vh;
+      }
+    }
+  </style>
+</head>
+<body class="has-mobile-nav">
+  <header class="header">
+    <div class="header-inner">
+      <a href="#" class="logo" onclick="switchView('search'); return false;">Furui<span>.</span></a>
+      <nav class="nav">
+        <button class="nav-btn" data-view="search">検索</button>
+        <button class="nav-btn active" data-view="results">一覧</button>
+        <button class="nav-btn" data-view="compare">比較</button>
+      </nav>
+      <div class="header-actions">
+        <div class="count-badge">
+          <span class="item">全 <strong class="accent">12</strong> 件</span>
+          <span class="item">候補 <strong class="candidate-count">3</strong> 件</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Report Modal -->
+  <div class="report-modal-backdrop" id="reportModal">
+    <div class="report-modal">
+      <div class="report-modal-header">
+        <h3 class="report-modal-title">相違点を報告</h3>
+        <button class="report-modal-close" onclick="closeReportModal()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+        </button>
+      </div>
+      <div class="report-modal-body" id="reportModalBody">
+        <div class="report-property-info" id="reportPropertyInfo">
+          <div class="report-property-name">渋谷マンション</div>
+          <div class="report-property-address">渋谷区渋谷2丁目</div>
+        </div>
+        
+        <div class="report-type-group">
+          <span class="report-type-label">相違点の種類（複数選択可）</span>
+          <div class="report-type-options">
+            <label class="report-type-option">
+              <input type="checkbox" name="report-type" value="price">
+              <span>賃料・費用</span>
+            </label>
+            <label class="report-type-option">
+              <input type="checkbox" name="report-type" value="layout">
+              <span>間取り・面積</span>
+            </label>
+            <label class="report-type-option">
+              <input type="checkbox" name="report-type" value="location">
+              <span>所在地・最寄駅</span>
+            </label>
+            <label class="report-type-option">
+              <input type="checkbox" name="report-type" value="features">
+              <span>設備・条件</span>
+            </label>
+            <label class="report-type-option">
+              <input type="checkbox" name="report-type" value="photos">
+              <span>写真</span>
+            </label>
+            <label class="report-type-option">
+              <input type="checkbox" name="report-type" value="availability">
+              <span>募集終了・成約済</span>
+            </label>
+            <label class="report-type-option">
+              <input type="checkbox" name="report-type" value="other">
+              <span>その他</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="report-field">
+          <label for="reportDetail">詳細（任意）</label>
+          <textarea id="reportDetail" placeholder="例：実際の賃料は10.5万円でした、バストイレ別ではなくユニットバスでした、など"></textarea>
+        </div>
+      </div>
+      <div class="report-modal-footer" id="reportModalFooter">
+        <button class="report-cancel-btn" onclick="closeReportModal()">キャンセル</button>
+        <button class="report-submit-btn" onclick="submitReport()">報告を送信</button>
+      </div>
+    </div>
+  </div>
+
+  <nav class="mobile-nav">
+    <div class="mobile-nav-inner">
+      <button class="mobile-nav-btn" data-view="search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        検索
+      </button>
+      <button class="mobile-nav-btn active" data-view="results">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>
+        一覧
+      </button>
+      <button class="mobile-nav-btn" data-view="compare">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 3h5v5"/><path d="M8 3H3v5"/><path d="M12 22v-8.3a4 4 0 0 0-1.172-2.872L3 3"/><path d="m15 9 6-6"/></svg>
+        比較
+      </button>
+    </div>
+  </nav>
+
+  <section class="view" id="search">
+    <div class="landing">
+      <h1 class="landing-title">物件を<em>ふるい分け</em>する</h1>
+      <p class="landing-desc">条件を入力して検索。ヒットした物件を比較して、本当に検討すべき物件だけを残せます。</p>
+
+      <div class="search-card">
+        <div class="search-section">
+          <h3 class="search-section-title">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+            基本条件
+          </h3>
+          <div class="search-row">
+            <div class="form-group">
+              <label class="form-label">都道府県</label>
+              <select class="form-select">
+                <option value="">選択してください</option>
+                <option>東京都</option><option>神奈川県</option><option>千葉県</option><option>埼玉県</option><option>大阪府</option><option>京都府</option><option>兵庫県</option><option>愛知県</option><option>福岡県</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">市区町村</label>
+              <select class="form-select">
+                <option value="">選択してください</option>
+                <option>渋谷区</option><option>新宿区</option><option>港区</option><option>目黒区</option><option>世田谷区</option><option>品川区</option><option>中央区</option><option>千代田区</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">沿線・駅（任意）</label>
+              <input type="text" class="form-input" placeholder="例：山手線、渋谷駅">
+            </div>
+          </div>
+        </div>
+
+        <div class="search-section">
+          <h3 class="search-section-title">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+            賃料・広さ
+          </h3>
+          <div class="search-row">
+            <div class="form-group">
+              <label class="form-label">賃料</label>
+              <div class="range-group">
+                <select class="form-select">
+                  <option value="">下限なし</option><option>3万円</option><option>4万円</option><option>5万円</option><option>6万円</option><option>7万円</option><option>8万円</option>
+                </select>
+                <span class="range-separator">〜</span>
+                <select class="form-select">
+                  <option value="">上限なし</option><option>8万円</option><option>10万円</option><option>12万円</option><option>15万円</option><option>20万円</option><option>25万円</option><option>30万円</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">管理費・共益費</label>
+              <select class="form-select">
+                <option>指定なし</option><option>込みで検索</option><option>なし物件のみ</option>
+              </select>
+            </div>
+          </div>
+          <div class="search-row" style="margin-top: 16px;">
+            <div class="form-group">
+              <label class="form-label">専有面積</label>
+              <div class="range-group">
+                <select class="form-select">
+                  <option value="">下限なし</option><option>20㎡</option><option>25㎡</option><option>30㎡</option><option>40㎡</option><option>50㎡</option>
+                </select>
+                <span class="range-separator">〜</span>
+                <select class="form-select">
+                  <option value="">上限なし</option><option>30㎡</option><option>40㎡</option><option>50㎡</option><option>60㎡</option><option>80㎡</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="search-section">
+          <h3 class="search-section-title">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+            間取り・建物
+          </h3>
+          <div class="form-group">
+            <label class="form-label">間取り</label>
+            <div class="tag-group">
+              <label class="tag-item"><input type="checkbox"><span class="tag-label">ワンルーム</span></label>
+              <label class="tag-item"><input type="checkbox"><span class="tag-label">1K</span></label>
+              <label class="tag-item"><input type="checkbox"><span class="tag-label">1DK</span></label>
+              <label class="tag-item"><input type="checkbox" checked><span class="tag-label">1LDK</span></label>
+              <label class="tag-item"><input type="checkbox" checked><span class="tag-label">2K</span></label>
+              <label class="tag-item"><input type="checkbox" checked><span class="tag-label">2DK</span></label>
+              <label class="tag-item"><input type="checkbox" checked><span class="tag-label">2LDK</span></label>
+              <label class="tag-item"><input type="checkbox"><span class="tag-label">3K</span></label>
+              <label class="tag-item"><input type="checkbox"><span class="tag-label">3DK</span></label>
+              <label class="tag-item"><input type="checkbox"><span class="tag-label">3LDK</span></label>
+              <label class="tag-item"><input type="checkbox"><span class="tag-label">4LDK以上</span></label>
+            </div>
+          </div>
+          <div class="search-row" style="margin-top: 16px;">
+            <div class="form-group">
+              <label class="form-label">建物種別</label>
+              <div class="tag-group">
+                <label class="tag-item"><input type="checkbox" checked><span class="tag-label">マンション</span></label>
+                <label class="tag-item"><input type="checkbox" checked><span class="tag-label">アパート</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">一戸建て</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">テラスハウス</span></label>
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">築年数</label>
+              <select class="form-select">
+                <option>指定なし</option><option>新築</option><option>3年以内</option><option>5年以内</option><option>10年以内</option><option>15年以内</option><option>20年以内</option><option>25年以内</option><option>30年以内</option>
+              </select>
+            </div>
+          </div>
+          <div class="search-row" style="margin-top: 16px;">
+            <div class="form-group">
+              <label class="form-label">駅徒歩</label>
+              <select class="form-select">
+                <option>指定なし</option><option>1分以内</option><option>3分以内</option><option>5分以内</option><option>7分以内</option><option>10分以内</option><option>15分以内</option><option>20分以内</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">階数</label>
+              <select class="form-select">
+                <option>指定なし</option><option>1階のみ</option><option>2階以上</option><option>3階以上</option><option>5階以上</option><option>10階以上</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="search-section">
+          <h3 class="search-section-title">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="20" height="14" x="2" y="5" rx="2"/><line x1="2" x2="22" y1="10" y2="10"/></svg>
+            初期費用
+          </h3>
+          <div class="search-row">
+            <div class="form-group">
+              <label class="form-label">敷金</label>
+              <select class="form-select">
+                <option>指定なし</option><option>なし</option><option>1ヶ月以下</option><option>2ヶ月以下</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">礼金</label>
+              <select class="form-select">
+                <option>指定なし</option><option>なし</option><option>1ヶ月以下</option><option>2ヶ月以下</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">保証人</label>
+              <select class="form-select">
+                <option>指定なし</option><option>不要</option><option>保証会社利用可</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="accordion">
+          <button class="accordion-trigger" onclick="toggleAccordion(this)">
+            こだわり条件を指定
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+          <div class="accordion-content">
+            <div class="feature-category">
+              <div class="feature-category-title">バス・トイレ・洗面</div>
+              <div class="tag-group">
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">バス・トイレ別</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">独立洗面台</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">追い焚き機能</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">浴室乾燥機</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">温水洗浄便座</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">シャワールーム</span></label>
+              </div>
+            </div>
+            <div class="feature-category">
+              <div class="feature-category-title">キッチン</div>
+              <div class="tag-group">
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">ガスコンロ可</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">2口コンロ以上</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">IHクッキングヒーター</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">システムキッチン</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">カウンターキッチン</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">都市ガス</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">プロパンガス</span></label>
+              </div>
+            </div>
+            <div class="feature-category">
+              <div class="feature-category-title">セキュリティ</div>
+              <div class="tag-group">
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">オートロック</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">モニター付きインターホン</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">カードキー</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">ディンプルキー</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">管理人常駐</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">24時間セキュリティ</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">防犯カメラ</span></label>
+              </div>
+            </div>
+            <div class="feature-category">
+              <div class="feature-category-title">収納</div>
+              <div class="tag-group">
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">クローゼット</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">ウォークインクローゼット</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">シューズボックス</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">床下収納</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">トランクルーム</span></label>
+              </div>
+            </div>
+            <div class="feature-category">
+              <div class="feature-category-title">室内設備</div>
+              <div class="tag-group">
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">エアコン</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">室内洗濯機置場</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">フローリング</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">床暖房</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">ロフト</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">家具付き</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">家電付き</span></label>
+              </div>
+            </div>
+            <div class="feature-category">
+              <div class="feature-category-title">共用設備</div>
+              <div class="tag-group">
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">宅配ボックス</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">エレベーター</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">敷地内ゴミ置き場</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">24時間ゴミ出し可</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">バリアフリー</span></label>
+              </div>
+            </div>
+            <div class="feature-category">
+              <div class="feature-category-title">ベランダ・テラス</div>
+              <div class="tag-group">
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">ベランダ・バルコニー</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">ルーフバルコニー</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">専用庭</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">テラス付き</span></label>
+              </div>
+            </div>
+            <div class="feature-category">
+              <div class="feature-category-title">位置・向き</div>
+              <div class="tag-group">
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">角部屋</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">南向き</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">最上階</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">2階以上</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">1階</span></label>
+              </div>
+            </div>
+            <div class="feature-category">
+              <div class="feature-category-title">構造</div>
+              <div class="tag-group">
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">鉄筋コンクリート(RC)</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">鉄骨鉄筋コンクリート(SRC)</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">鉄骨造</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">分譲賃貸</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">メゾネット</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">タワーマンション</span></label>
+              </div>
+            </div>
+            <div class="feature-category">
+              <div class="feature-category-title">入居条件</div>
+              <div class="tag-group">
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">ペット相談可</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">楽器相談可</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">2人入居可</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">ルームシェア可</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">事務所利用可</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">女性限定</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">高齢者歓迎</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">外国人可</span></label>
+              </div>
+            </div>
+            <div class="feature-category">
+              <div class="feature-category-title">駐車場・駐輪場</div>
+              <div class="tag-group">
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">駐車場あり</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">駐車場無料</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">駐輪場あり</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">バイク置場あり</span></label>
+              </div>
+            </div>
+            <div class="feature-category">
+              <div class="feature-category-title">通信・放送</div>
+              <div class="tag-group">
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">インターネット無料</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">光ファイバー対応</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">ケーブルTV</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">BS/CS対応</span></label>
+              </div>
+            </div>
+            <div class="feature-category">
+              <div class="feature-category-title">特徴</div>
+              <div class="tag-group">
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">デザイナーズ</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">リノベーション</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">即入居可</span></label>
+                <label class="tag-item"><input type="checkbox"><span class="tag-label">フリーレント</span></label>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="search-actions">
+          <span class="search-hint">検索結果から更に絞り込みできます</span>
+          <div class="search-buttons">
+            <button class="btn btn-secondary" onclick="resetSearch()">条件クリア</button>
+            <button class="btn btn-primary" onclick="doSearch()">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+              この条件で検索
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="features">
+        <div class="feature">
+          <div class="feature-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+          </div>
+          <h3>条件で絞る</h3>
+          <p>結果一覧から、さらにスライダーやチェックで即座に絞り込み</p>
+        </div>
+        <div class="feature">
+          <div class="feature-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>
+          </div>
+          <h3>判断を整理</h3>
+          <p>候補・微妙・除外の3段階で、検討状況を一目で把握</p>
+        </div>
+        <div class="feature">
+          <div class="feature-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" x2="21" y1="14" y2="3"/></svg>
+          </div>
+          <h3>詳細は元サイトで</h3>
+          <p>問い合わせ・詳細確認はYahoo不動産の物件ページへ</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="results-view active" id="results">
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <span class="sidebar-title">条件で絞り込み</span>
+        <button class="edit-search-btn" onclick="switchView('search')">検索条件を編集</button>
+      </div>
+      <div class="sidebar-content">
+        <div class="filter-section">
+          <h3 class="filter-title">リアルタイム絞り込み</h3>
+          <div class="filter-group">
+            <label class="filter-label">家賃上限<span class="filter-value">〜12万円</span></label>
+            <input type="range" class="range-slider" min="3" max="30" value="12">
+          </div>
+          <div class="filter-group">
+            <label class="filter-label">駅徒歩<span class="filter-value">〜10分</span></label>
+            <input type="range" class="range-slider" min="1" max="30" value="10">
+          </div>
+          <div class="filter-group">
+            <label class="filter-label">専有面積<span class="filter-value">〜50㎡</span></label>
+            <input type="range" class="range-slider" min="15" max="100" value="50" data-unit="㎡">
+          </div>
+          <div class="filter-group">
+            <label class="filter-label">築年数</label>
+            <div class="checkbox-group">
+              <label class="checkbox-item"><input type="checkbox" checked><span class="checkbox-label">新築</span></label>
+              <label class="checkbox-item"><input type="checkbox" checked><span class="checkbox-label">〜5年</span></label>
+              <label class="checkbox-item"><input type="checkbox" checked><span class="checkbox-label">〜10年</span></label>
+              <label class="checkbox-item"><input type="checkbox"><span class="checkbox-label">〜20年</span></label>
+              <label class="checkbox-item"><input type="checkbox"><span class="checkbox-label">20年〜</span></label>
+            </div>
+          </div>
+          <div class="filter-group">
+            <label class="filter-label">間取り</label>
+            <div class="checkbox-group">
+              <label class="checkbox-item"><input type="checkbox"><span class="checkbox-label">1R</span></label>
+              <label class="checkbox-item"><input type="checkbox"><span class="checkbox-label">1K</span></label>
+              <label class="checkbox-item"><input type="checkbox" checked><span class="checkbox-label">1LDK</span></label>
+              <label class="checkbox-item"><input type="checkbox" checked><span class="checkbox-label">2LDK</span></label>
+              <label class="checkbox-item"><input type="checkbox"><span class="checkbox-label">3LDK</span></label>
+            </div>
+          </div>
+          <div class="filter-group">
+            <label class="filter-label">建物種別</label>
+            <div class="checkbox-group">
+              <label class="checkbox-item"><input type="checkbox" checked><span class="checkbox-label">マンション</span></label>
+              <label class="checkbox-item"><input type="checkbox" checked><span class="checkbox-label">アパート</span></label>
+              <label class="checkbox-item"><input type="checkbox"><span class="checkbox-label">一戸建て</span></label>
+            </div>
+          </div>
+          <div class="filter-group">
+            <label class="filter-label">こだわり</label>
+            <div class="checkbox-group">
+              <label class="checkbox-item"><input type="checkbox"><span class="checkbox-label">バストイレ別</span></label>
+              <label class="checkbox-item"><input type="checkbox"><span class="checkbox-label">オートロック</span></label>
+              <label class="checkbox-item"><input type="checkbox"><span class="checkbox-label">宅配BOX</span></label>
+              <label class="checkbox-item"><input type="checkbox"><span class="checkbox-label">ペット可</span></label>
+              <label class="checkbox-item"><input type="checkbox"><span class="checkbox-label">南向き</span></label>
+              <label class="checkbox-item"><input type="checkbox"><span class="checkbox-label">角部屋</span></label>
+            </div>
+          </div>
+          <div class="filter-group">
+            <label class="filter-label">ステータス</label>
+            <div class="checkbox-group">
+              <label class="checkbox-item"><input type="checkbox" checked><span class="checkbox-label">未分類</span></label>
+              <label class="checkbox-item"><input type="checkbox" checked><span class="checkbox-label">候補</span></label>
+              <label class="checkbox-item"><input type="checkbox" checked><span class="checkbox-label">微妙</span></label>
+              <label class="checkbox-item"><input type="checkbox"><span class="checkbox-label">除外</span></label>
+            </div>
+          </div>
+        </div>
+        <div class="filter-result">
+          <div class="filter-result-count">8</div>
+          <div class="filter-result-label">件がヒット</div>
+        </div>
+        <button class="reset-btn">絞り込みをリセット</button>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <div class="toolbar">
+        <div class="toolbar-left">
+          <button class="mobile-filter-toggle" onclick="openMobileFilter()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+            絞り込み
+          </button>
+          <div class="search-status">
+            12件の物件
+          </div>
+        </div>
+        <div class="toolbar-left">
+          <select class="sort-select">
+            <option>スコア順</option><option>家賃が安い順</option><option>駅から近い順</option><option>築年数が新しい順</option><option>専有面積が広い順</option>
+          </select>
+          <div class="view-toggle">
+            <button class="view-toggle-btn active" data-view-mode="grid" title="グリッド表示">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>
+            </button>
+            <button class="view-toggle-btn" data-view-mode="list" title="リスト表示">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" x2="21" y1="6" y2="6"/><line x1="8" x2="21" y1="12" y2="12"/><line x1="8" x2="21" y1="18" y2="18"/><line x1="3" x2="3.01" y1="6" y2="6"/><line x1="3" x2="3.01" y1="12" y2="12"/><line x1="3" x2="3.01" y1="18" y2="18"/></svg>
+            </button>
+            <button class="view-toggle-btn" data-view-mode="map" title="地図表示">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="property-grid">
+        <article class="property-card status-candidate">
+          <div class="property-image">
+            <img src="https://images.unsplash.com/photo-1502672260266-1c1ef2d93688?w=400&h=300&fit=crop" alt="">
+            <div class="property-badges"><span class="property-badge new">NEW</span></div>
+            <span class="property-score high">92</span>
+          </div>
+          <div class="property-body">
+            <div class="property-price">9.8<small>万円</small><span class="mgmt">管理費 8,000円</span></div>
+            <div class="property-meta">
+              <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>1LDK</span>
+              <span>45.2㎡</span><span>築3年</span><span>3階</span>
+            </div>
+            <div class="property-location"><strong>渋谷駅</strong> 徒歩7分 ／ 渋谷区渋谷2丁目</div>
+            <div class="property-features">
+              <span class="property-feature-tag">バストイレ別</span>
+              <span class="property-feature-tag">オートロック</span>
+              <span class="property-feature-tag">宅配BOX</span>
+              <span class="property-feature-tag">浴室乾燥機</span>
+            </div>
+            <div class="property-actions">
+              <button class="status-btn candidate active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>候補</button>
+              <button class="status-btn maybe"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg>微妙</button>
+              <button class="status-btn exclude"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>除外</button>
+            </div>
+            <div class="property-footer"><a href="#" class="external-link" target="_blank">Yahoo不動産で詳細を見る<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" x2="21" y1="14" y2="3"/></svg></a><button class="report-btn" onclick="openReportModal(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" x2="4" y1="22" y2="15"/></svg>報告</button></div>
+          </div>
+        </article>
+
+        <article class="property-card status-maybe">
+          <div class="property-image">
+            <img src="https://images.unsplash.com/photo-1560448204-e02f11c3d0e2?w=400&h=300&fit=crop" alt="">
+            <span class="property-score mid">78</span>
+          </div>
+          <div class="property-body">
+            <div class="property-price">11.5<small>万円</small><span class="mgmt">管理費 10,000円</span></div>
+            <div class="property-meta">
+              <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>2LDK</span>
+              <span>58.7㎡</span><span>築8年</span><span>5階</span>
+            </div>
+            <div class="property-location"><strong>恵比寿駅</strong> 徒歩12分 ／ 渋谷区恵比寿南</div>
+            <div class="property-features">
+              <span class="property-feature-tag">追い焚き</span>
+              <span class="property-feature-tag">浴室乾燥機</span>
+            </div>
+            <div class="property-actions">
+              <button class="status-btn candidate"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>候補</button>
+              <button class="status-btn maybe active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg>微妙</button>
+              <button class="status-btn exclude"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>除外</button>
+            </div>
+            <div class="property-footer"><a href="#" class="external-link" target="_blank">Yahoo不動産で詳細を見る<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" x2="21" y1="14" y2="3"/></svg></a><button class="report-btn" onclick="openReportModal(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" x2="4" y1="22" y2="15"/></svg>報告</button></div>
+          </div>
+        </article>
+
+        <article class="property-card">
+          <div class="property-image">
+            <img src="https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?w=400&h=300&fit=crop" alt="">
+            <span class="property-score high">85</span>
+          </div>
+          <div class="property-body">
+            <div class="property-price">8.5<small>万円</small><span class="mgmt">管理費 5,000円</span></div>
+            <div class="property-meta">
+              <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>1LDK</span>
+              <span>42.0㎡</span><span>築5年</span><span>8階</span>
+            </div>
+            <div class="property-location"><strong>中目黒駅</strong> 徒歩5分 ／ 目黒区上目黒</div>
+            <div class="property-features">
+              <span class="property-feature-tag">ペット可</span>
+              <span class="property-feature-tag">南向き</span>
+              <span class="property-feature-tag">角部屋</span>
+            </div>
+            <div class="property-actions">
+              <button class="status-btn candidate"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>候補</button>
+              <button class="status-btn maybe"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg>微妙</button>
+              <button class="status-btn exclude"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>除外</button>
+            </div>
+            <div class="property-footer"><a href="#" class="external-link" target="_blank">Yahoo不動産で詳細を見る<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" x2="21" y1="14" y2="3"/></svg></a><button class="report-btn" onclick="openReportModal(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" x2="4" y1="22" y2="15"/></svg>報告</button></div>
+          </div>
+        </article>
+
+        <article class="property-card status-candidate">
+          <div class="property-image">
+            <img src="https://images.unsplash.com/photo-1484154218962-a197022b5858?w=400&h=300&fit=crop" alt="">
+            <div class="property-badges"><span class="property-badge new">NEW</span></div>
+            <span class="property-score high">90</span>
+          </div>
+          <div class="property-body">
+            <div class="property-price">9.0<small>万円</small><span class="mgmt">管理費 6,000円</span></div>
+            <div class="property-meta">
+              <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>1LDK</span>
+              <span>40.8㎡</span><span>新築</span><span>6階</span>
+            </div>
+            <div class="property-location"><strong>三軒茶屋駅</strong> 徒歩3分 ／ 世田谷区三軒茶屋</div>
+            <div class="property-features">
+              <span class="property-feature-tag">敷金なし</span>
+              <span class="property-feature-tag">ネット無料</span>
+              <span class="property-feature-tag">2口コンロ</span>
+            </div>
+            <div class="property-actions">
+              <button class="status-btn candidate active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>候補</button>
+              <button class="status-btn maybe"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg>微妙</button>
+              <button class="status-btn exclude"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>除外</button>
+            </div>
+            <div class="property-footer"><a href="#" class="external-link" target="_blank">Yahoo不動産で詳細を見る<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" x2="21" y1="14" y2="3"/></svg></a><button class="report-btn" onclick="openReportModal(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" x2="4" y1="22" y2="15"/></svg>報告</button></div>
+          </div>
+        </article>
+
+        <article class="property-card">
+          <div class="property-image">
+            <img src="https://images.unsplash.com/photo-1512917774080-9991f1c4c750?w=400&h=300&fit=crop" alt="">
+            <span class="property-score high">88</span>
+          </div>
+          <div class="property-body">
+            <div class="property-price">10.2<small>万円</small><span class="mgmt">管理費 8,000円</span></div>
+            <div class="property-meta">
+              <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>2LDK</span>
+              <span>52.3㎡</span><span>築2年</span><span>10階</span>
+            </div>
+            <div class="property-location"><strong>代官山駅</strong> 徒歩8分 ／ 渋谷区代官山町</div>
+            <div class="property-features">
+              <span class="property-feature-tag">オートロック</span>
+              <span class="property-feature-tag">宅配BOX</span>
+              <span class="property-feature-tag">浴室乾燥機</span>
+            </div>
+            <div class="property-actions">
+              <button class="status-btn candidate"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>候補</button>
+              <button class="status-btn maybe"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg>微妙</button>
+              <button class="status-btn exclude"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>除外</button>
+            </div>
+            <div class="property-footer"><a href="#" class="external-link" target="_blank">Yahoo不動産で詳細を見る<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" x2="21" y1="14" y2="3"/></svg></a><button class="report-btn" onclick="openReportModal(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" x2="4" y1="22" y2="15"/></svg>報告</button></div>
+          </div>
+        </article>
+
+        <article class="property-card status-excluded">
+          <div class="property-image">
+            <img src="https://images.unsplash.com/photo-1493809842364-78817add7ffb?w=400&h=300&fit=crop" alt="">
+            <span class="property-score">65</span>
+          </div>
+          <div class="property-body">
+            <div class="property-price">7.2<small>万円</small><span class="mgmt">管理費 3,000円</span></div>
+            <div class="property-meta">
+              <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>1K</span>
+              <span>28.5㎡</span><span>築15年</span><span>2階</span>
+            </div>
+            <div class="property-location"><strong>池袋駅</strong> 徒歩18分 ／ 豊島区池袋</div>
+            <div class="property-features"><span class="property-feature-tag">駐輪場</span></div>
+            <div class="property-actions">
+              <button class="status-btn candidate"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>候補</button>
+              <button class="status-btn maybe"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg>微妙</button>
+              <button class="status-btn exclude active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>除外</button>
+            </div>
+            <div class="property-footer"><a href="#" class="external-link" target="_blank">Yahoo不動産で詳細を見る<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" x2="21" y1="14" y2="3"/></svg></a><button class="report-btn" onclick="openReportModal(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" x2="4" y1="22" y2="15"/></svg>報告</button></div>
+          </div>
+        </article>
+      </div>
+
+      <!-- Map View -->
+      <div class="map-container" id="mapContainer" style="display: none;">
+        <div id="propertyMap"></div>
+        <div class="map-property-list">
+          <div class="map-property-list-header">
+            <span class="map-property-count">6件の物件</span>
+            <button class="map-list-close" onclick="closeMapPropertyList()">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </button>
+          </div>
+          <div class="map-property-items" id="mapPropertyItems">
+            <!-- 選択された物件がここに表示 -->
+          </div>
+        </div>
+      </div>
+    </main>
+  </section>
+
+  <section class="compare-view" id="compare">
+    <div class="compare-header">
+      <h2 class="compare-title">候補物件 <span>3件</span></h2>
+      <div class="compare-tabs">
+        <button class="compare-tab active">候補</button>
+        <button class="compare-tab">微妙</button>
+        <button class="compare-tab">すべて</button>
+      </div>
+    </div>
+    <div class="compare-table">
+      <table>
+        <thead>
+          <tr><th>物件</th><th>賃料</th><th>初期費用</th><th>間取り</th><th>最寄駅</th><th>築年数</th><th>特徴</th><th>スコア</th><th></th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><div class="compare-property"><img src="https://images.unsplash.com/photo-1502672260266-1c1ef2d93688?w=100&h=75&fit=crop" class="compare-property-img"><div><div class="compare-property-name">渋谷マンション</div><div class="compare-property-address">渋谷区渋谷2丁目</div></div></div></td>
+            <td><span class="compare-value highlight">9.8万円</span><br><span style="font-size:11px;color:var(--text-muted)">管理費 8,000円</span></td>
+            <td><span class="compare-value">敷1/礼1</span></td>
+            <td><span class="compare-value">1LDK / 45.2㎡</span></td>
+            <td><span class="compare-value">渋谷駅 徒歩7分</span></td>
+            <td><span class="compare-value">築3年</span></td>
+            <td><span class="property-feature-tag" style="font-size:10px;">バストイレ別</span><span class="property-feature-tag" style="font-size:10px;">オートロック</span></td>
+            <td><span class="compare-score">92</span></td>
+            <td><a href="#" class="btn btn-secondary" target="_blank">詳細</a></td>
+          </tr>
+          <tr>
+            <td><div class="compare-property"><img src="https://images.unsplash.com/photo-1484154218962-a197022b5858?w=100&h=75&fit=crop" class="compare-property-img"><div><div class="compare-property-name">三軒茶屋レジデンス</div><div class="compare-property-address">世田谷区三軒茶屋1丁目</div></div></div></td>
+            <td><span class="compare-value highlight">9.0万円</span><br><span style="font-size:11px;color:var(--text-muted)">管理費 6,000円</span></td>
+            <td><span class="compare-value" style="color:var(--candidate)">敷0/礼1</span></td>
+            <td><span class="compare-value">1LDK / 40.8㎡</span></td>
+            <td><span class="compare-value">三軒茶屋駅 徒歩3分</span></td>
+            <td><span class="compare-value">新築</span></td>
+            <td><span class="property-feature-tag" style="font-size:10px;">ネット無料</span><span class="property-feature-tag" style="font-size:10px;">2口コンロ</span></td>
+            <td><span class="compare-score">90</span></td>
+            <td><a href="#" class="btn btn-secondary" target="_blank">詳細</a></td>
+          </tr>
+          <tr>
+            <td><div class="compare-property"><img src="https://images.unsplash.com/photo-1512917774080-9991f1c4c750?w=100&h=75&fit=crop" class="compare-property-img"><div><div class="compare-property-name">代官山テラス</div><div class="compare-property-address">渋谷区代官山町</div></div></div></td>
+            <td><span class="compare-value">10.2万円</span><br><span style="font-size:11px;color:var(--text-muted)">管理費 8,000円</span></td>
+            <td><span class="compare-value">敷1/礼1</span></td>
+            <td><span class="compare-value">2LDK / 52.3㎡</span></td>
+            <td><span class="compare-value">代官山駅 徒歩8分</span></td>
+            <td><span class="compare-value">築2年</span></td>
+            <td><span class="property-feature-tag" style="font-size:10px;">宅配BOX</span><span class="property-feature-tag" style="font-size:10px;">浴室乾燥</span></td>
+            <td><span class="compare-score">88</span></td>
+            <td><a href="#" class="btn btn-secondary" target="_blank">詳細</a></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <div class="mobile-filter-sheet" id="mobileFilter">
+    <div class="mobile-filter-backdrop" onclick="closeMobileFilter()"></div>
+    <div class="mobile-filter-content">
+      <div class="mobile-filter-header">
+        <h3 class="mobile-filter-title">絞り込み条件</h3>
+        <button class="mobile-filter-close" onclick="closeMobileFilter()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+        </button>
+      </div>
+      <div class="filter-group">
+        <label class="filter-label">家賃上限<span class="filter-value">〜12万円</span></label>
+        <input type="range" class="range-slider" min="3" max="30" value="12">
+      </div>
+      <div class="filter-group">
+        <label class="filter-label">駅徒歩<span class="filter-value">〜10分</span></label>
+        <input type="range" class="range-slider" min="1" max="30" value="10">
+      </div>
+      <div class="filter-group">
+        <label class="filter-label">専有面積<span class="filter-value">〜50㎡</span></label>
+        <input type="range" class="range-slider" min="15" max="100" value="50" data-unit="㎡">
+      </div>
+      <div class="filter-group">
+        <label class="filter-label">築年数</label>
+        <div class="checkbox-group">
+          <label class="checkbox-item"><input type="checkbox" checked><span class="checkbox-label">新築</span></label>
+          <label class="checkbox-item"><input type="checkbox" checked><span class="checkbox-label">〜5年</span></label>
+          <label class="checkbox-item"><input type="checkbox" checked><span class="checkbox-label">〜10年</span></label>
+          <label class="checkbox-item"><input type="checkbox"><span class="checkbox-label">〜20年</span></label>
+        </div>
+      </div>
+      <div class="filter-group">
+        <label class="filter-label">間取り</label>
+        <div class="checkbox-group">
+          <label class="checkbox-item"><input type="checkbox"><span class="checkbox-label">1R</span></label>
+          <label class="checkbox-item"><input type="checkbox"><span class="checkbox-label">1K</span></label>
+          <label class="checkbox-item"><input type="checkbox" checked><span class="checkbox-label">1LDK</span></label>
+          <label class="checkbox-item"><input type="checkbox" checked><span class="checkbox-label">2LDK</span></label>
+          <label class="checkbox-item"><input type="checkbox"><span class="checkbox-label">3LDK</span></label>
+        </div>
+      </div>
+      <div class="filter-group">
+        <label class="filter-label">こだわり</label>
+        <div class="checkbox-group">
+          <label class="checkbox-item"><input type="checkbox"><span class="checkbox-label">バストイレ別</span></label>
+          <label class="checkbox-item"><input type="checkbox"><span class="checkbox-label">オートロック</span></label>
+          <label class="checkbox-item"><input type="checkbox"><span class="checkbox-label">ペット可</span></label>
+          <label class="checkbox-item"><input type="checkbox"><span class="checkbox-label">南向き</span></label>
+        </div>
+      </div>
+      <button class="btn btn-primary mobile-filter-apply" onclick="closeMobileFilter()">8件を表示</button>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    function switchView(viewId) {
+      document.querySelectorAll('.view, .results-view, .compare-view').forEach(v => v.classList.remove('active'));
+      document.querySelectorAll('.nav-btn, .mobile-nav-btn').forEach(btn => btn.classList.remove('active'));
+      const targetView = document.getElementById(viewId);
+      if (targetView) targetView.classList.add('active');
+      document.querySelectorAll('[data-view="' + viewId + '"]').forEach(btn => btn.classList.add('active'));
+    }
+
+    document.querySelectorAll('.nav-btn, .mobile-nav-btn').forEach(btn => {
+      btn.addEventListener('click', () => switchView(btn.dataset.view));
+    });
+
+    function doSearch() {
+      switchView('results');
+      const statusEl = document.querySelector('.search-status');
+      statusEl.innerHTML = '<span class="loading"></span> 検索中...';
+      setTimeout(() => { 
+        statusEl.innerHTML = '12件の物件'; 
+      }, 1500);
+    }
+
+    function resetSearch() {
+      document.querySelectorAll('.search-card input[type="checkbox"]').forEach(cb => cb.checked = false);
+      document.querySelectorAll('.search-card select').forEach(sel => sel.selectedIndex = 0);
+    }
+
+    function toggleAccordion(trigger) {
+      trigger.classList.toggle('open');
+      trigger.nextElementSibling.classList.toggle('open');
+    }
+
+    function openMobileFilter() {
+      document.getElementById('mobileFilter').classList.add('open');
+      document.body.style.overflow = 'hidden';
+    }
+
+    function closeMobileFilter() {
+      document.getElementById('mobileFilter').classList.remove('open');
+      document.body.style.overflow = '';
+    }
+
+    document.querySelectorAll('.property-card').forEach(card => {
+      card.querySelectorAll('.status-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          card.querySelectorAll('.status-btn').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          card.classList.remove('status-candidate', 'status-maybe', 'status-excluded');
+          if (btn.classList.contains('candidate')) card.classList.add('status-candidate');
+          else if (btn.classList.contains('maybe')) card.classList.add('status-maybe');
+          else if (btn.classList.contains('exclude')) card.classList.add('status-excluded');
+        });
+      });
+    });
+
+    document.querySelectorAll('.compare-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.compare-tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+      });
+    });
+
+    document.querySelectorAll('.range-slider').forEach(slider => {
+      slider.addEventListener('input', (e) => {
+        const label = e.target.parentElement.querySelector('.filter-value');
+        if (label) {
+          const customUnit = e.target.dataset.unit;
+          let unit = '万円';
+          if (customUnit) {
+            unit = customUnit;
+          } else if (parseInt(e.target.max) <= 30 && parseInt(e.target.min) >= 1) {
+            unit = '分';
+          }
+          label.textContent = '〜' + e.target.value + unit;
+        }
+      });
+    });
+
+    // Sample property data with coordinates
+    const properties = [
+      { id: 1, name: '渋谷マンション', price: '9.8万円', layout: '1LDK', area: '45.2㎡', station: '渋谷駅 徒歩7分', address: '渋谷区渋谷2丁目', age: '築3年', lat: 35.6595, lng: 139.7004, status: 'candidate', image: 'https://images.unsplash.com/photo-1502672260266-1c1ef2d93688?w=400&h=300&fit=crop' },
+      { id: 2, name: '恵比寿レジデンス', price: '11.5万円', layout: '2LDK', area: '58.7㎡', station: '恵比寿駅 徒歩12分', address: '渋谷区恵比寿南', age: '築8年', lat: 35.6461, lng: 139.7103, status: 'maybe', image: 'https://images.unsplash.com/photo-1560448204-e02f11c3d0e2?w=400&h=300&fit=crop' },
+      { id: 3, name: '中目黒コート', price: '8.5万円', layout: '1LDK', area: '42.0㎡', station: '中目黒駅 徒歩5分', address: '目黒区上目黒', age: '築5年', lat: 35.6442, lng: 139.6987, status: 'none', image: 'https://images.unsplash.com/photo-1522708323590-d24dbb6b0267?w=400&h=300&fit=crop' },
+      { id: 4, name: '三軒茶屋レジデンス', price: '9.0万円', layout: '1LDK', area: '40.8㎡', station: '三軒茶屋駅 徒歩3分', address: '世田谷区三軒茶屋', age: '新築', lat: 35.6436, lng: 139.6703, status: 'candidate', image: 'https://images.unsplash.com/photo-1484154218962-a197022b5858?w=400&h=300&fit=crop' },
+      { id: 5, name: '代官山テラス', price: '10.2万円', layout: '2LDK', area: '52.3㎡', station: '代官山駅 徒歩8分', address: '渋谷区代官山町', age: '築2年', lat: 35.6488, lng: 139.7034, status: 'none', image: 'https://images.unsplash.com/photo-1512917774080-9991f1c4c750?w=400&h=300&fit=crop' },
+      { id: 6, name: '池袋アパート', price: '7.2万円', layout: '1K', area: '28.5㎡', station: '池袋駅 徒歩18分', address: '豊島区池袋', age: '築15年', lat: 35.7295, lng: 139.7109, status: 'excluded', image: 'https://images.unsplash.com/photo-1493809842364-78817add7ffb?w=400&h=300&fit=crop' }
+    ];
+
+    let map = null;
+    let markers = [];
+    let currentViewMode = 'grid';
+
+    // View mode toggle (grid/list/map)
+    document.querySelectorAll('.view-toggle-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.view-toggle-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        
+        const mode = btn.dataset.viewMode;
+        currentViewMode = mode;
+        
+        const grid = document.querySelector('.property-grid');
+        const mapContainer = document.getElementById('mapContainer');
+        
+        if (mode === 'map') {
+          grid.style.display = 'none';
+          mapContainer.style.display = 'block';
+          initMap();
+        } else {
+          grid.style.display = 'grid';
+          mapContainer.style.display = 'none';
+          if (mode === 'list') {
+            grid.style.gridTemplateColumns = '1fr';
+          } else {
+            grid.style.gridTemplateColumns = 'repeat(auto-fill, minmax(300px, 1fr))';
+          }
+        }
+      });
+    });
+
+    function initMap() {
+      if (map) {
+        map.invalidateSize();
+        return;
+      }
+
+      // Initialize map centered on Tokyo
+      map = L.map('propertyMap').setView([35.6595, 139.7004], 13);
+
+      // Add tile layer (OpenStreetMap)
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors'
+      }).addTo(map);
+
+      // Add markers for each property
+      addMarkers();
+
+      // Fit bounds to show all markers
+      if (markers.length > 0) {
+        const group = L.featureGroup(markers);
+        map.fitBounds(group.getBounds().pad(0.1));
+      }
+    }
+
+    function addMarkers() {
+      markers.forEach(m => map.removeLayer(m));
+      markers = [];
+
+      properties.forEach(prop => {
+        const markerHtml = `<div class="custom-marker ${prop.status}">${prop.price}</div>`;
+        const icon = L.divIcon({
+          html: markerHtml,
+          className: 'custom-div-icon',
+          iconSize: [80, 30],
+          iconAnchor: [40, 30]
+        });
+
+        const marker = L.marker([prop.lat, prop.lng], { icon: icon }).addTo(map);
+        
+        const popupContent = `
+          <div class="map-popup">
+            <img src="${prop.image}" alt="" class="map-popup-image">
+            <div class="map-popup-body">
+              <div class="map-popup-price">${prop.price}<small>/月</small></div>
+              <div class="map-popup-meta">${prop.layout} / ${prop.area} / ${prop.age}</div>
+              <div class="map-popup-location">${prop.station}<br>${prop.address}</div>
+              <a href="#" class="map-popup-link" target="_blank">Yahoo不動産で詳細を見る</a>
+            </div>
+          </div>
+        `;
+        
+        marker.bindPopup(popupContent, {
+          maxWidth: 280,
+          minWidth: 240
+        });
+
+        marker.on('click', () => {
+          showPropertyInList(prop);
+        });
+
+        markers.push(marker);
+      });
+    }
+
+    function showPropertyInList(prop) {
+      const listEl = document.querySelector('.map-property-list');
+      const itemsEl = document.getElementById('mapPropertyItems');
+      
+      itemsEl.innerHTML = `
+        <div class="map-property-item" onclick="window.open('#', '_blank')">
+          <div class="map-property-item-price">${prop.price}<span style="font-size:12px;font-weight:400;color:var(--text-muted)">/月</span></div>
+          <div class="map-property-item-info">
+            <span>${prop.layout}</span>
+            <span>${prop.area}</span>
+            <span>${prop.age}</span>
+          </div>
+          <div class="map-property-item-location">${prop.station} / ${prop.address}</div>
+        </div>
+      `;
+      
+      listEl.classList.add('active');
+      document.querySelector('.map-property-count').textContent = '1件の物件';
+    }
+
+    function closeMapPropertyList() {
+      document.querySelector('.map-property-list').classList.remove('active');
+    }
+
+    function showAllPropertiesInList() {
+      const listEl = document.querySelector('.map-property-list');
+      const itemsEl = document.getElementById('mapPropertyItems');
+      
+      itemsEl.innerHTML = properties.map(prop => `
+        <div class="map-property-item" onclick="focusProperty(${prop.id})">
+          <div class="map-property-item-price">${prop.price}<span style="font-size:12px;font-weight:400;color:var(--text-muted)">/月</span></div>
+          <div class="map-property-item-info">
+            <span>${prop.layout}</span>
+            <span>${prop.area}</span>
+            <span>${prop.age}</span>
+          </div>
+          <div class="map-property-item-location">${prop.station}</div>
+        </div>
+      `).join('');
+      
+      listEl.classList.add('active');
+      document.querySelector('.map-property-count').textContent = `${properties.length}件の物件`;
+    }
+
+    function focusProperty(id) {
+      const prop = properties.find(p => p.id === id);
+      if (prop && map) {
+        map.setView([prop.lat, prop.lng], 15);
+        const marker = markers[properties.indexOf(prop)];
+        if (marker) {
+          marker.openPopup();
+        }
+      }
+    }
+
+    // Report Modal Functions
+    let currentReportProperty = null;
+
+    function openReportModal(btn) {
+      const card = btn.closest('.property-card');
+      const name = card.querySelector('.property-title').textContent;
+      const address = card.querySelector('.property-location').textContent;
+      
+      currentReportProperty = { name, address };
+      
+      document.getElementById('reportPropertyInfo').innerHTML = `
+        <div class="report-property-name">${name}</div>
+        <div class="report-property-address">${address}</div>
+      `;
+      
+      // Reset form
+      document.querySelectorAll('#reportModal input[type="checkbox"]').forEach(cb => cb.checked = false);
+      document.getElementById('reportDetail').value = '';
+      
+      // Show form, hide success
+      document.getElementById('reportModalBody').innerHTML = `
+        <div class="report-property-info">
+          <div class="report-property-name">${name}</div>
+          <div class="report-property-address">${address}</div>
+        </div>
+        
+        <div class="report-type-group">
+          <span class="report-type-label">相違点の種類（複数選択可）</span>
+          <div class="report-type-options">
+            <label class="report-type-option">
+              <input type="checkbox" name="report-type" value="price">
+              <span>賃料・費用</span>
+            </label>
+            <label class="report-type-option">
+              <input type="checkbox" name="report-type" value="layout">
+              <span>間取り・面積</span>
+            </label>
+            <label class="report-type-option">
+              <input type="checkbox" name="report-type" value="location">
+              <span>所在地・最寄駅</span>
+            </label>
+            <label class="report-type-option">
+              <input type="checkbox" name="report-type" value="features">
+              <span>設備・条件</span>
+            </label>
+            <label class="report-type-option">
+              <input type="checkbox" name="report-type" value="photos">
+              <span>写真</span>
+            </label>
+            <label class="report-type-option">
+              <input type="checkbox" name="report-type" value="availability">
+              <span>募集終了・成約済</span>
+            </label>
+            <label class="report-type-option">
+              <input type="checkbox" name="report-type" value="other">
+              <span>その他</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="report-field">
+          <label for="reportDetail">詳細（任意）</label>
+          <textarea id="reportDetail" placeholder="例：実際の賃料は10.5万円でした、バストイレ別ではなくユニットバスでした、など"></textarea>
+        </div>
+      `;
+      document.getElementById('reportModalFooter').style.display = 'flex';
+      
+      document.getElementById('reportModal').classList.add('open');
+      document.body.style.overflow = 'hidden';
+    }
+
+    function closeReportModal() {
+      document.getElementById('reportModal').classList.remove('open');
+      document.body.style.overflow = '';
+    }
+
+    function submitReport() {
+      const types = Array.from(document.querySelectorAll('#reportModal input[name="report-type"]:checked'))
+        .map(cb => cb.value);
+      const detail = document.getElementById('reportDetail').value;
+      
+      // In real app, send to server
+      console.log('Report submitted:', { property: currentReportProperty, types, detail });
+      
+      // Show success
+      document.getElementById('reportModalBody').innerHTML = `
+        <div class="report-success">
+          <div class="report-success-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>
+          </div>
+          <div class="report-success-title">報告を受け付けました</div>
+          <div class="report-success-text">ご協力ありがとうございます。<br>内容を確認し、必要に応じて情報を更新いたします。</div>
+        </div>
+      `;
+      document.getElementById('reportModalFooter').style.display = 'none';
+      
+      // Auto close after 2 seconds
+      setTimeout(() => {
+        closeReportModal();
+      }, 2000);
+    }
+
+    // Close modal on backdrop click
+    document.getElementById('reportModal').addEventListener('click', (e) => {
+      if (e.target === document.getElementById('reportModal')) {
+        closeReportModal();
+      }
+    });
+  </script>
+</body>
+</html>

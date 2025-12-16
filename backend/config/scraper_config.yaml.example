@@ -1,0 +1,71 @@
+# Scraper Configuration (Example - copy to scraper_config.yaml and update passwords)
+# This file controls scraping behavior to minimize load and ensure safe operation
+
+# Database Configuration
+database:
+  type: "mysql"  # "mysql" or "postgres"
+  mysql:
+    host: "127.0.0.1"
+    port: 3306
+    user: "shiboroom_user"
+    password: "YOUR_MYSQL_PASSWORD_HERE"  # Change this!
+    database: "shiboroom"
+  postgres:
+    host: "db"
+    port: 5432
+    user: "realestate_user"
+    password: "realestate_pass"
+    database: "realestate_db"
+    sslmode: "disable"
+
+# Search Engine Configuration
+search:
+  meilisearch:
+    host: "http://127.0.0.1:7700"
+    api_key: "YOUR_MEILISEARCH_KEY_HERE"  # Change this! (16+ bytes for production)
+
+# Timezone Configuration
+timezone: "Asia/Tokyo"
+
+scraper:
+  # Request timing
+  request_delay_seconds: 2  # Minimum delay between requests (rate limiting)
+  timeout_seconds: 30       # HTTP timeout for each request
+
+  # Retry policy
+  max_retries: 3            # Maximum number of retry attempts
+  retry_delay_seconds: 2    # Base delay for exponential backoff
+
+  # Safety limits
+  max_requests_per_day: 5000    # Daily request limit
+  stop_on_error: true           # Stop immediately on 403/429/5xx errors
+  concurrent_limit: 1           # Number of concurrent scrapers (1 = sequential only)
+
+  # Scraping schedule
+  daily_run_enabled: false      # Enable/disable daily scheduled runs
+  daily_run_time: "02:00"      # Time for daily run (HH:MM format, JST)
+
+  # List page scraping
+  list_page_limit: 50          # Max properties to scrape from list page
+
+# Rate limiting
+rate_limit:
+  enabled: true
+  requests_per_minute: 30     # Maximum requests per minute
+  requests_per_hour: 1800     # Maximum requests per hour (30 req/min * 60 min)
+
+# Error handling
+error_handling:
+  retry_on_network_error: true
+  retry_on_5xx: true
+  retry_on_4xx: false         # Don't retry on client errors (400-499)
+  log_errors: true
+
+# User Agent
+user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+
+# Logging
+logging:
+  level: "info"              # debug, info, warn, error
+  log_requests: true         # Log all requests
+  log_responses: false       # Log response bodies (can be large)

@@ -1,0 +1,32 @@
+[Unit]
+Description=Shiboroom Frontend (Next.js)
+After=network.target shiboroom-backend.service
+
+[Service]
+Type=simple
+User=grik
+Group=grik
+WorkingDirectory=/var/www/shiboroom/frontend/.next/standalone
+ExecStart=/usr/bin/node server.js
+
+# 環境変数
+Environment="NODE_ENV=production"
+Environment="PORT=5177"
+Environment="NEXT_PUBLIC_API_URL=https://shiboroom.com"
+Environment="HOSTNAME=0.0.0.0"
+
+# ログ設定
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=shiboroom-frontend
+
+# 再起動設定
+Restart=always
+RestartSec=5
+
+# セキュリティ設定
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

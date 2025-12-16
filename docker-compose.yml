@@ -1,0 +1,139 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database (保持 - バックアップ用)
+  db:
+    image: postgres:15-alpine
+    container_name: realestate-db
+    environment:
+      POSTGRES_DB: realestate_db
+      POSTGRES_USER: realestate_user
+      POSTGRES_PASSWORD: realestate_pass
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - realestate-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U realestate_user -d realestate_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # MySQL 8.x Database (新規 - メインDB)
+  mysql:
+    image: mysql:8.0
+    container_name: realestate-mysql
+    platform: linux/amd64
+    environment:
+      MYSQL_DATABASE: realestate_db
+      MYSQL_USER: realestate_user
+      MYSQL_PASSWORD: realestate_pass
+      MYSQL_ROOT_PASSWORD: root_pass
+      TZ: Asia/Tokyo
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --default-authentication-plugin=mysql_native_password
+    ports:
+      - "3308:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - realestate-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "realestate_user", "-prealestate_pass"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Meilisearch
+  meilisearch:
+    image: getmeili/meilisearch:v1.5
+    container_name: realestate-meilisearch
+    environment:
+      MEILI_MASTER_KEY: masterKey123
+      MEILI_ENV: development
+    ports:
+      - "7700:7700"
+    volumes:
+      - meilisearch_data:/meili_data
+    networks:
+      - realestate-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7700/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Go Backend
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: realestate-backend
+    environment:
+      DB_TYPE: mysql
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USER: realestate_user
+      DB_PASSWORD: realestate_pass
+      DB_NAME: realestate_db
+      MEILISEARCH_HOST: http://meilisearch:7700
+      MEILISEARCH_KEY: masterKey123
+      PORT: 8084
+      CONFIG_PATH: /app/config/scraper_config.yaml
+    ports:
+      - "8084:8084"
+    volumes:
+      - ./backend/config:/app/config:ro
+    networks:
+      - realestate-network
+    depends_on:
+      mysql:
+        condition: service_healthy
+      meilisearch:
+        condition: service_healthy
+
+  # React Frontend (旧 - 保持)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: realestate-frontend
+    environment:
+      VITE_API_URL: http://localhost:8084
+    ports:
+      - "5177:5176"
+    networks:
+      - realestate-network
+    depends_on:
+      - backend
+    profiles:
+      - old
+
+  # Next.js Frontend (新 - メイン)
+  frontend-next:
+    build:
+      context: ./frontend-next
+      dockerfile: Dockerfile
+    container_name: realestate-frontend-next
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8084
+    ports:
+      - "5176:5176"
+    networks:
+      - realestate-network
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+    name: realestate_postgres_data
+  mysql_data:
+    name: realestate_mysql_data
+  meilisearch_data:
+    name: realestate_meilisearch_data
+
+networks:
+  realestate-network:
+    name: realestate-network
+    driver: bridge

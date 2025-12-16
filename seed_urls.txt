@@ -1,0 +1,6 @@
+# Yahoo不動産の物件URL（PoC用サンプル）
+# 提供いただいたURLを含む
+https://realestate.yahoo.co.jp/rent/detail/0000055699960d016bade416e6f6603d9a67efad8081/?ult_out=valuecommerce_rent&vc_lpp=MyY5MDI0MjdmMzhmJjY5NDBhMzU0JjM3NTM3NiY2OThmYmQ1NCZhVUNqVkFBRFU0UjM4b1NKQ29vRllRcUtDSDZBNncmNAlhVUNqVkFBRFU0UjM4b1NKQ29vRllRcUtDSDZBNncJMDg4OTMwMTU1ODAyODc4OTgyMjUxMjE2MDAwOTU2CQlodHRwczovL2NvbWZ5Lm1haXNvbi8J
+
+# 以下に追加のURLを手動で追加してください
+# 例: https://realestate.yahoo.co.jp/rent/detail/...

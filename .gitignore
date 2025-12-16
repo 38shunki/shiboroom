@@ -1,0 +1,75 @@
+# Build artifacts
+.deploy-build/
+backend/shiboroom-api
+backend/cmd/api/shiboroom-api
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test binaries
+*.test
+*.out
+
+# Go workspace file
+go.work
+
+# Dependency directories
+node_modules/
+vendor/
+
+# Frontend build
+frontend-next/.next/
+frontend-next/out/
+frontend-next/build/
+frontend-next/.turbo/
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+logs/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+meilisearch-data/
+data.ms/
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.vim/
+
+# Config backups
+*.backup.*
+config/*.backup.*
+
+# Sensitive configuration (passwords should not be committed)
+backend/config/scraper_config.yaml
+
+# Temporary files
+/tmp/
+*.tmp
