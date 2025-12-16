@@ -116,8 +116,10 @@ EOF
 ########################################
 # [4] バックエンド設定ファイルをデプロイ
 ########################################
-echo "==== [4] バックエンド設定ファイルをデプロイ ===="
-rsync -avz "$BACKEND_SRC/config/scraper_config.yaml" "${REMOTE_HOST}:${REMOTE_CONFIG_DIR}/"
+echo "==== [4] バックエンド設定ファイルをデプロイ (スキップ) ===="
+echo "→ 設定ファイルは手動管理のためデプロイをスキップします"
+# NOTE: scraper_config.yaml contains sensitive data (passwords) and is managed manually on the server
+# rsync -avz "$BACKEND_SRC/config/scraper_config.yaml" "${REMOTE_HOST}:${REMOTE_CONFIG_DIR}/"
 
 ########################################
 # [5] バックエンドバイナリをサーバーへ反映
