@@ -334,8 +334,9 @@ func scrapeBatch(c *gin.Context) {
 
 func scrapeListPage(c *gin.Context) {
 	var req struct {
-		URL   string `json:"url" binding:"required"`
-		Limit int    `json:"limit"` // Optional: max number of properties to scrape
+		URL         string `json:"url" binding:"required"`
+		Limit       int    `json:"limit"`       // Optional: max number of properties to scrape
+		Concurrency int    `json:"concurrency"` // Optional: number of concurrent scrapers (default: 5)
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -346,6 +347,11 @@ func scrapeListPage(c *gin.Context) {
 	// Default limit to 20 if not specified
 	if req.Limit == 0 {
 		req.Limit = 20
+	}
+
+	// Default concurrency to 5
+	if req.Concurrency == 0 {
+		req.Concurrency = 5
 	}
 
 	s := createScraper()
@@ -365,35 +371,59 @@ func scrapeListPage(c *gin.Context) {
 		propertyURLs = propertyURLs[:req.Limit]
 	}
 
-	// Step 2: Scrape each property
+	// Step 2: Scrape properties concurrently
+	log.Printf("Starting concurrent scraping with %d workers", req.Concurrency)
+
+	type result struct {
+		property *models.Property
+		err      error
+		url      string
+	}
+
+	results := make(chan result, len(propertyURLs))
+	semaphore := make(chan struct{}, req.Concurrency)
+
+	// Launch goroutines for each URL
+	for _, url := range propertyURLs {
+		go func(propertyURL string) {
+			semaphore <- struct{}{} // Acquire semaphore
+			defer func() { <-semaphore }() // Release semaphore
+
+			scraper := createScraper()
+			property, err := scraper.ScrapeProperty(propertyURL)
+			results <- result{property: property, err: err, url: propertyURL}
+		}(url)
+	}
+
+	// Collect results
 	var properties []models.Property
 	var errors []string
 
-	for i, url := range propertyURLs {
-		log.Printf("Scraping property %d/%d: %s", i+1, len(propertyURLs), url)
+	for i := 0; i < len(propertyURLs); i++ {
+		res := <-results
 
-		property, err := s.ScrapeProperty(url)
-		if err != nil {
-			errors = append(errors, fmt.Sprintf("%s: %v", url, err))
+		if res.err != nil {
+			errors = append(errors, fmt.Sprintf("%s: %v", res.url, res.err))
+			log.Printf("Failed to scrape %s: %v", res.url, res.err)
 			continue
 		}
 
 		// Save to database
+		var saveErr error
 		if gormDB != nil {
-			err = gormDB.SaveProperty(property)
+			saveErr = gormDB.SaveProperty(res.property)
 		} else {
-			err = db.SaveProperty(property)
+			saveErr = db.SaveProperty(res.property)
 		}
 
-		if err != nil {
-			errors = append(errors, fmt.Sprintf("%s: %v", url, err))
+		if saveErr != nil {
+			errors = append(errors, fmt.Sprintf("%s: %v", res.url, saveErr))
+			log.Printf("Failed to save %s: %v", res.url, saveErr)
 			continue
 		}
 
-		properties = append(properties, *property)
-
-		// Small delay to be respectful
-		time.Sleep(2 * time.Second)
+		properties = append(properties, *res.property)
+		log.Printf("Successfully scraped and saved property %d/%d: %s", i+1, len(propertyURLs), res.url)
 	}
 
 	// Index all properties
@@ -403,9 +433,11 @@ func scrapeListPage(c *gin.Context) {
 		}
 	}
 
+	log.Printf("Scraping complete: %d successful, %d failed out of %d total", len(properties), len(errors), len(propertyURLs))
+
 	c.JSON(http.StatusOK, gin.H{
 		"found":      len(propertyURLs),
-		"success":    len(properties),
+		"scraped":    len(properties),
 		"failed":     len(errors),
 		"errors":     errors,
 		"properties": properties,
