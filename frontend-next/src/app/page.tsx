@@ -37,17 +37,17 @@ export default function Home() {
 
   // Search & Filter states
   const [searchQuery, setSearchQuery] = useState('')
-  const [minRent, setMinRent] = useState<number>(3)
-  const [maxRent, setMaxRent] = useState<number>(30)
+  const [minRent, setMinRent] = useState<number>(5)
+  const [maxRent, setMaxRent] = useState<number>(50)
   const [selectedFloorPlans, setSelectedFloorPlans] = useState<string[]>([])
   const [minWalkTime, setMinWalkTime] = useState<number>(1)
   const [maxWalkTime, setMaxWalkTime] = useState<number>(30)
   const [minArea, setMinArea] = useState<number>(15)
   const [maxArea, setMaxArea] = useState<number>(100)
   const [minBuildingAge, setMinBuildingAge] = useState<number>(0)
-  const [maxBuildingAge, setMaxBuildingAge] = useState<number>(30)
+  const [maxBuildingAge, setMaxBuildingAge] = useState<number>(50)
   const [minFloor, setMinFloor] = useState<number>(1)
-  const [maxFloor, setMaxFloor] = useState<number>(20)
+  const [maxFloor, setMaxFloor] = useState<number>(30)
 
   // Additional filters
   const [selectedBuildingTypes, setSelectedBuildingTypes] = useState<string[]>([])
@@ -442,7 +442,7 @@ export default function Home() {
                       type="range"
                       className="range-slider"
                       min="3"
-                      max="30"
+                      max="50"
                       value={minRent}
                       onChange={(e) => {
                         const val = Number(e.target.value)
@@ -453,7 +453,7 @@ export default function Home() {
                       type="range"
                       className="range-slider"
                       min="3"
-                      max="30"
+                      max="50"
                       value={maxRent}
                       onChange={(e) => {
                         const val = Number(e.target.value)
@@ -535,7 +535,7 @@ export default function Home() {
                       type="range"
                       className="range-slider"
                       min="0"
-                      max="30"
+                      max="50"
                       value={minBuildingAge}
                       onChange={(e) => {
                         const val = Number(e.target.value)
@@ -546,7 +546,7 @@ export default function Home() {
                       type="range"
                       className="range-slider"
                       min="0"
-                      max="30"
+                      max="50"
                       value={maxBuildingAge}
                       onChange={(e) => {
                         const val = Number(e.target.value)
@@ -566,7 +566,7 @@ export default function Home() {
                       type="range"
                       className="range-slider"
                       min="1"
-                      max="20"
+                      max="30"
                       value={minFloor}
                       onChange={(e) => {
                         const val = Number(e.target.value)
@@ -577,7 +577,7 @@ export default function Home() {
                       type="range"
                       className="range-slider"
                       min="1"
-                      max="20"
+                      max="30"
                       value={maxFloor}
                       onChange={(e) => {
                         const val = Number(e.target.value)
