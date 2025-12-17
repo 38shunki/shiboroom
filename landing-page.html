@@ -1,0 +1,987 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>shiboroom - 気になる物件だけが残る部屋探し</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    :root {
+      --text-primary: #2d3748;
+      --text-secondary: #5a6578;
+      --text-muted: #8a94a6;
+      --bg-white: #ffffff;
+      --bg-light: #f8fafa;
+      --bg-accent-soft: #effafa;
+      --border-light: #e2e8f0;
+      --accent: #0d9488;
+      --accent-hover: #0b7c72;
+      --accent-light: #e6f7f5;
+      --accent-lighter: #ccfbf1;
+      --good: #0d9488;
+      --ok: #eab308;
+      --bad: #dc2626;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      font-family: 'Zen Maru Gothic', sans-serif;
+      color: var(--text-primary);
+      background: var(--bg-white);
+      line-height: 1.9;
+      font-size: 15px;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* Header */
+    header {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 100;
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(8px);
+      border-bottom: 1px solid var(--border-light);
+    }
+
+    .header-inner {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 14px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .logo {
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--accent);
+      text-decoration: none;
+      letter-spacing: 0.02em;
+    }
+
+    .header-cta {
+      font-size: 13px;
+      font-weight: 500;
+      padding: 10px 20px;
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s;
+      text-decoration: none;
+    }
+
+    .header-cta:hover {
+      background: var(--accent-hover);
+    }
+
+    /* Hero */
+    .hero {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      padding: 100px 24px 60px;
+      background: linear-gradient(135deg, var(--bg-accent-soft) 0%, var(--bg-white) 100%);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero-inner {
+      max-width: 1100px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 48px;
+      align-items: center;
+      width: 100%;
+    }
+
+    @media (max-width: 800px) {
+      .hero-inner {
+        grid-template-columns: 1fr;
+        text-align: center;
+      }
+      .hero-content {
+        order: 1;
+      }
+      .hero-visual {
+        order: 0;
+        max-width: 320px;
+        margin: 0 auto;
+      }
+    }
+
+    .hero-content {
+      z-index: 1;
+    }
+
+    .hero-badge {
+      display: inline-block;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--accent);
+      background: var(--accent-light);
+      padding: 6px 14px;
+      border-radius: 20px;
+      margin-bottom: 20px;
+    }
+
+    .hero-title {
+      font-size: clamp(28px, 4.5vw, 40px);
+      font-weight: 700;
+      line-height: 1.5;
+      margin-bottom: 20px;
+      color: var(--text-primary);
+    }
+
+    .hero-title-accent {
+      color: var(--accent);
+    }
+
+    .hero-subtitle {
+      font-size: 15px;
+      color: var(--text-secondary);
+      margin-bottom: 16px;
+      line-height: 1.9;
+    }
+
+    .hero-note {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-bottom: 32px;
+      line-height: 1.8;
+    }
+
+    .hero-cta {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 15px;
+      font-weight: 500;
+      padding: 16px 28px;
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: all 0.2s;
+      text-decoration: none;
+      box-shadow: 0 4px 14px rgba(13, 148, 136, 0.25);
+    }
+
+    .hero-cta:hover {
+      background: var(--accent-hover);
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(13, 148, 136, 0.3);
+    }
+
+    .hero-cta svg {
+      width: 16px;
+      height: 16px;
+    }
+
+    .hero-visual {
+      position: relative;
+    }
+
+    .hero-image {
+      width: 100%;
+      max-width: 520px;
+      border-radius: 16px;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.12);
+      object-fit: cover;
+    }
+
+    /* Problem Section */
+    .problem {
+      padding: 80px 24px;
+      background: var(--bg-white);
+    }
+
+    .problem-inner {
+      max-width: 800px;
+      margin: 0 auto;
+    }
+
+    .section-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--accent);
+      margin-bottom: 16px;
+    }
+
+    .problem-title {
+      font-size: clamp(22px, 4vw, 28px);
+      font-weight: 700;
+      line-height: 1.6;
+      margin-bottom: 40px;
+      color: var(--text-primary);
+    }
+
+    .problem-list {
+      display: grid;
+      gap: 14px;
+    }
+
+    .problem-item {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 18px 22px;
+      background: var(--bg-light);
+      border-radius: 12px;
+      transition: transform 0.2s;
+    }
+
+    .problem-item:hover {
+      transform: translateX(4px);
+    }
+
+    .problem-icon {
+      width: 38px;
+      height: 38px;
+      background: white;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      flex-shrink: 0;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    }
+
+    .problem-text {
+      color: var(--text-secondary);
+      font-size: 14px;
+    }
+
+    /* Solution Section */
+    .solution {
+      padding: 80px 24px;
+      background: var(--bg-accent-soft);
+    }
+
+    .solution-inner {
+      max-width: 800px;
+      margin: 0 auto;
+    }
+
+    .solution-header {
+      margin-bottom: 48px;
+    }
+
+    .solution-tagline {
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--accent);
+      margin-bottom: 8px;
+    }
+
+    .solution-title {
+      font-size: clamp(22px, 4vw, 28px);
+      font-weight: 700;
+      line-height: 1.6;
+      color: var(--text-primary);
+    }
+
+    .features {
+      display: grid;
+      gap: 28px;
+    }
+
+    .feature {
+      background: white;
+      border-radius: 16px;
+      padding: 28px;
+      box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+    }
+
+    .feature-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .feature-number {
+      width: 30px;
+      height: 30px;
+      background: var(--accent-light);
+      color: var(--accent);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .feature-title {
+      font-size: 17px;
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+
+    .feature-badge {
+      font-size: 10px;
+      font-weight: 500;
+      color: var(--accent);
+      background: var(--accent-lighter);
+      padding: 3px 8px;
+      border-radius: 4px;
+      margin-left: 8px;
+    }
+
+    .feature-desc {
+      color: var(--text-secondary);
+      font-size: 14px;
+      line-height: 1.9;
+      margin-bottom: 20px;
+    }
+
+    .feature-visual {
+      background: var(--bg-light);
+      border-radius: 12px;
+      padding: 20px;
+    }
+
+    /* Demo: Hide Button */
+    .demo-card {
+      background: white;
+      border-radius: 10px;
+      padding: 14px 18px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 14px;
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.05);
+    }
+
+    .demo-card-info {
+      flex: 1;
+    }
+
+    .demo-card-title {
+      font-size: 14px;
+      font-weight: 500;
+      margin-bottom: 3px;
+    }
+
+    .demo-card-meta {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .demo-hide-btn {
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      border: none;
+      background: var(--bg-light);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+      flex-shrink: 0;
+    }
+
+    .demo-hide-btn:hover {
+      background: #fecaca;
+    }
+
+    .demo-hide-btn svg {
+      width: 16px;
+      height: 16px;
+      color: var(--text-muted);
+    }
+
+    .demo-hide-btn:hover svg {
+      color: var(--bad);
+    }
+
+    /* Demo: Rating */
+    .demo-rating-label {
+      font-size: 13px;
+      color: var(--text-muted);
+      text-align: center;
+      margin-bottom: 14px;
+    }
+
+    .demo-rating {
+      display: flex;
+      gap: 10px;
+      justify-content: center;
+    }
+
+    .rating-option {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .rating-btn {
+      width: 52px;
+      height: 52px;
+      border-radius: 12px;
+      border: 2px solid var(--border-light);
+      background: white;
+      font-size: 20px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .rating-btn.active-good {
+      border-color: var(--good);
+      background: var(--accent-light);
+    }
+
+    .rating-btn.active-ok {
+      border-color: var(--ok);
+      background: #fefce8;
+    }
+
+    .rating-btn.active-bad {
+      border-color: var(--bad);
+      background: #fef2f2;
+    }
+
+    .rating-label {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    /* Demo: Report */
+    .demo-report {
+      background: white;
+      border-radius: 10px;
+      padding: 14px 18px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+    }
+
+    .report-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .report-icon {
+      width: 18px;
+      height: 18px;
+      color: var(--ok);
+    }
+
+    .report-title {
+      font-size: 13px;
+      font-weight: 500;
+    }
+
+    .report-item {
+      font-size: 13px;
+      color: var(--text-secondary);
+      padding: 10px 0;
+      border-top: 1px solid var(--border-light);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .report-count {
+      font-size: 11px;
+      color: white;
+      background: var(--ok);
+      padding: 2px 8px;
+      border-radius: 8px;
+    }
+
+    /* Plus Alpha Section */
+    .plus-alpha {
+      margin-top: 28px;
+      background: white;
+      border-radius: 16px;
+      padding: 24px 28px;
+      box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+    }
+
+    .plus-alpha-header {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text-primary);
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .plus-alpha-list {
+      display: grid;
+      gap: 12px;
+    }
+
+    .plus-alpha-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      font-size: 14px;
+      color: var(--text-secondary);
+      line-height: 1.7;
+    }
+
+    .plus-alpha-icon {
+      font-size: 16px;
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+
+    /* Why Section */
+    .why {
+      padding: 80px 24px;
+      background: var(--bg-white);
+    }
+
+    .why-inner {
+      max-width: 800px;
+      margin: 0 auto;
+    }
+
+    .why-title {
+      font-size: clamp(22px, 4vw, 28px);
+      font-weight: 700;
+      line-height: 1.6;
+      margin-bottom: 24px;
+      color: var(--text-primary);
+    }
+
+    .why-text {
+      color: var(--text-secondary);
+      font-size: 14px;
+      line-height: 2;
+    }
+
+    .why-text p {
+      margin-bottom: 18px;
+    }
+
+    .why-text p:last-child {
+      margin-bottom: 0;
+    }
+
+    .why-highlight {
+      background: var(--accent-light);
+      padding: 22px 24px;
+      border-radius: 12px;
+      margin-top: 28px;
+      border-left: 4px solid var(--accent);
+    }
+
+    .why-highlight-text {
+      font-size: 14px;
+      color: var(--text-primary);
+      line-height: 1.8;
+    }
+
+    /* CTA Section */
+    .cta {
+      padding: 80px 24px;
+      text-align: center;
+      background: var(--bg-accent-soft);
+    }
+
+    .cta-content {
+      max-width: 500px;
+      margin: 0 auto;
+    }
+
+    .cta-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--accent);
+      background: var(--accent-light);
+      padding: 8px 16px;
+      border-radius: 20px;
+      margin-bottom: 24px;
+    }
+
+    .cta-title {
+      font-size: clamp(22px, 4vw, 28px);
+      font-weight: 700;
+      margin-bottom: 28px;
+      color: var(--text-primary);
+    }
+
+    .cta-buttons {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .cta-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 15px;
+      font-weight: 500;
+      padding: 16px 32px;
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: all 0.2s;
+      text-decoration: none;
+      box-shadow: 0 4px 14px rgba(13, 148, 136, 0.25);
+    }
+
+    .cta-btn:hover {
+      background: var(--accent-hover);
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(13, 148, 136, 0.3);
+    }
+
+    .cta-btn-sub {
+      font-size: 13px;
+      color: var(--text-muted);
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+
+    .cta-btn-sub:hover {
+      color: var(--accent);
+    }
+
+    /* Footer */
+    footer {
+      padding: 36px 24px;
+      background: var(--bg-light);
+      border-top: 1px solid var(--border-light);
+    }
+
+    .footer-inner {
+      max-width: 800px;
+      margin: 0 auto;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+
+    .footer-logo {
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--accent);
+    }
+
+    .footer-note {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    /* Animations */
+    @media (prefers-reduced-motion: no-preference) {
+      .hero-content > * {
+        opacity: 0;
+        transform: translateY(16px);
+        animation: fadeUp 0.5s ease forwards;
+      }
+
+      .hero-badge { animation-delay: 0s; }
+      .hero-title { animation-delay: 0.1s; }
+      .hero-subtitle { animation-delay: 0.15s; }
+      .hero-note { animation-delay: 0.2s; }
+      .hero-cta { animation-delay: 0.25s; }
+
+      .hero-visual {
+        opacity: 0;
+        transform: translateX(20px);
+        animation: fadeLeft 0.6s ease 0.2s forwards;
+      }
+
+      @keyframes fadeUp {
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      @keyframes fadeLeft {
+        to {
+          opacity: 1;
+          transform: translateX(0);
+        }
+      }
+    }
+
+    /* Mobile */
+    @media (max-width: 600px) {
+      .header-inner {
+        padding: 12px 16px;
+      }
+
+      .hero, .problem, .solution, .why, .cta {
+        padding-left: 16px;
+        padding-right: 16px;
+      }
+
+      .feature {
+        padding: 22px;
+      }
+
+      .plus-alpha {
+        padding: 20px;
+      }
+
+      .demo-rating {
+        gap: 8px;
+      }
+
+      .rating-btn {
+        width: 46px;
+        height: 46px;
+        font-size: 18px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <a href="#" class="logo">shiboroom</a>
+      <a href="#search" class="header-cta">部屋を探す</a>
+    </div>
+  </header>
+
+  <section class="hero">
+    <div class="hero-inner">
+      <div class="hero-content">
+        <span class="hero-badge">🏠 新しい賃貸検索</span>
+        <h1 class="hero-title">
+          <span class="hero-title-accent">気になる物件だけ</span>が<br>残る部屋探し
+        </h1>
+        <p class="hero-subtitle">
+          条件に合わない物件をワンタップで非表示に。<br>
+          検索するたびに候補が絞られていく、新しい体験です。
+        </p>
+        <p class="hero-note">
+          ※掲載料で上位が決まる検索ではなく、ユーザーの判断が中心の設計です。
+        </p>
+        <a href="#search" class="hero-cta">
+          検索をはじめる
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M17 8l4 4m0 0l-4 4m4-4H3" />
+          </svg>
+        </a>
+      </div>
+
+      <div class="hero-visual">
+        <img src="./hero-room.jpg" alt="Modern cozy room interior" class="hero-image">
+      </div>
+    </div>
+  </section>
+
+  <section class="problem">
+    <div class="problem-inner">
+      <p class="section-label">😮‍💨 こんな経験ありませんか？</p>
+      <h2 class="problem-title">
+        部屋探しが疲れるのは、<br>
+        情報が多すぎるから
+      </h2>
+      <div class="problem-list">
+        <div class="problem-item">
+          <div class="problem-icon">📋</div>
+          <p class="problem-text">条件を絞っても、関係ない物件が大量に表示される</p>
+        </div>
+        <div class="problem-item">
+          <div class="problem-icon">🔄</div>
+          <p class="problem-text">一度見て却下した物件が、検索するたびに出てくる</p>
+        </div>
+        <div class="problem-item">
+          <div class="problem-icon">🤔</div>
+          <p class="problem-text">表記が正しいか分からず、すべて疑いながら見る必要がある</p>
+        </div>
+        <div class="problem-item">
+          <div class="problem-icon">😵‍💫</div>
+          <p class="problem-text">探せば探すほど、どれがいいのか分からなくなる</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="solution">
+    <div class="solution-inner">
+      <p class="section-label">✨ shiboroomの特徴</p>
+      <div class="solution-header">
+        <p class="solution-tagline">「増やす」より「減らす」</p>
+        <h2 class="solution-title">
+          興味のない物件を消していく、<br>
+          新しい検索体験
+        </h2>
+      </div>
+
+      <div class="features">
+        <div class="feature">
+          <div class="feature-header">
+            <div class="feature-number">1</div>
+            <h3 class="feature-title">ワンタップで非表示<span class="feature-badge">コア</span></h3>
+          </div>
+          <p class="feature-desc">
+            気に入らない物件はその場で非表示に。一度消した物件は、次回から表示されません。使うほど検索結果がスッキリしていきます。
+          </p>
+          <div class="feature-visual">
+            <div class="demo-card">
+              <div class="demo-card-info">
+                <p class="demo-card-title">渋谷区恵比寿 1K</p>
+                <p class="demo-card-meta">8.5万円 / 徒歩7分 / 25㎡</p>
+              </div>
+              <button class="demo-hide-btn" title="非表示にする">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="feature">
+          <div class="feature-header">
+            <div class="feature-number">2</div>
+            <h3 class="feature-title">◎ △ × で絞り込み<span class="feature-badge">コア</span></h3>
+          </div>
+          <p class="feature-desc">
+            「できれば8分以内、10分までなら許容」のような曖昧な条件を設定できます。×は自動で除外、△は注意つきで表示します。
+          </p>
+          <div class="feature-visual">
+            <p class="demo-rating-label">駅からの距離</p>
+            <div class="demo-rating">
+              <div class="rating-option">
+                <button class="rating-btn active-good">◎</button>
+                <span class="rating-label">〜8分</span>
+              </div>
+              <div class="rating-option">
+                <button class="rating-btn active-ok">△</button>
+                <span class="rating-label">9〜10分</span>
+              </div>
+              <div class="rating-option">
+                <button class="rating-btn active-bad">×</button>
+                <span class="rating-label">11分〜</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="feature">
+          <div class="feature-header">
+            <div class="feature-number">3</div>
+            <h3 class="feature-title">怪しい物件が分かる<span class="feature-badge">コア</span></h3>
+          </div>
+          <p class="feature-desc">
+            ユーザーからの「表記と違うかも」報告を可視化します。運営が正否を断定するのではなく、報告があること・件数を表示します。すべての物件を疑って見る必要がなくなります。
+          </p>
+          <div class="feature-visual">
+            <div class="demo-report">
+              <div class="report-header">
+                <svg class="report-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+                <span class="report-title">相違報告あり</span>
+              </div>
+              <div class="report-item">
+                <span>独立洗面台の表記が怪しい</span>
+                <span class="report-count">3件</span>
+              </div>
+              <div class="report-item">
+                <span>写真と実際の印象が違う</span>
+                <span class="report-count">2件</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- +α -->
+      <div class="plus-alpha">
+        <p class="plus-alpha-header">＋α あると便利</p>
+        <div class="plus-alpha-list">
+          <div class="plus-alpha-item">
+            <span class="plus-alpha-icon">📝</span>
+            <span><strong>メモ機能</strong>:却下理由・内見メモを残せる</span>
+          </div>
+          <div class="plus-alpha-item">
+            <span class="plus-alpha-icon">📐</span>
+            <span><strong>広さの不明可視化</strong>:LDKなど定義が不明な場合は「不明」として扱える(比較しやすい)</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="why">
+    <div class="why-inner">
+      <p class="section-label">💡 なぜ他ではできなかった?</p>
+      <h2 class="why-title">
+        掲載料モデルの限界
+      </h2>
+      <div class="why-text">
+        <p>
+          既存の不動産ポータルサイトは、不動産会社から掲載料をもらうモデルが中心です。そのため、ユーザーが物件をどんどん非表示にする体験は、構造的に提供しづらいことがあります。
+        </p>
+        <p>
+          結果として、興味のない物件が何度も表示され、ユーザーは「使いにくい」と感じながらも我慢して使い続けていました。
+        </p>
+      </div>
+      <div class="why-highlight">
+        <p class="why-highlight-text">
+          shiboroomは、探す量を減らすことを最優先に、判断しやすい検索体験を提供します。
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section class="cta" id="search">
+    <div class="cta-content">
+      <span class="cta-badge">✅ 登録不要で今すぐ検索できます</span>
+      <h2 class="cta-title">部屋探しをはじめる</h2>
+      <div class="cta-buttons">
+        <a href="/search" class="cta-btn">
+          検索をはじめる
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M17 8l4 4m0 0l-4 4m4-4H3" />
+          </svg>
+        </a>
+        <a href="/search" class="cta-btn-sub">検索画面へ →</a>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="footer-inner">
+      <span class="footer-logo">shiboroom</span>
+      <span class="footer-note">本サービスは技術検証目的で運営しています</span>
+    </div>
+  </footer>
+</body>
+</html>

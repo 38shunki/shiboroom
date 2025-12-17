@@ -9,12 +9,30 @@ import (
 	"net/http"
 	"net/url"
 	"real-estate-portal/internal/models"
+	"real-estate-portal/internal/ratelimit"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
+)
+
+var (
+	// Global rate limiter for Yahoo Real Estate
+	// Burst control strategy: reduce concurrent requests and increase delay
+	yahooLimiter = ratelimit.NewYahooLimiter(
+		1,                     // maxInFlight: 1 concurrent request (avoid burst)
+		2500*time.Millisecond, // baseDelay: 2.5s base
+		1500*time.Millisecond, // jitter: 0-1.5s (total: 2.5-4.0s)
+	)
+
+	// Global circuit breaker to detect WAF blocks
+	// Stricter early detection to avoid prolonged blocks
+	circuitBreaker = NewCircuitBreaker(
+		8,              // failureThreshold: 8 failures out of 20 requests (stricter)
+		1*time.Hour,    // resetTimeout: wait 1 hour before retry
+	)
 )
 
 type Scraper struct {
@@ -70,34 +88,63 @@ func (s *Scraper) doRequestWithRetry(req *http.Request) (*http.Response, error) 
 	var resp *http.Response
 	var err error
 
+	// Check circuit breaker before proceeding
+	if !circuitBreaker.CanProceed() {
+		isOpen, failures, total := circuitBreaker.GetStatus()
+		return nil, fmt.Errorf("circuit breaker open: suspected WAF block (%d/%d failures, open=%v)", failures, total, isOpen)
+	}
+
+	// Acquire global rate limiter before starting
+	yahooLimiter.Acquire()
+	defer yahooLimiter.Release()
+
 	for attempt := 0; attempt <= s.maxRetries; attempt++ {
 		if attempt > 0 {
-			// Exponential backoff: delay * 2^(attempt-1)
+			// Exponential backoff: delay * 2^(attempt-1), max 60s
 			backoff := time.Duration(math.Pow(2, float64(attempt-1))) * s.retryDelay
-			log.Printf("Retry attempt %d/%d after %v", attempt, s.maxRetries, backoff)
+			if backoff > 60*time.Second {
+				backoff = 60 * time.Second
+			}
+			log.Printf("Retry attempt %d/%d after %v (inFlight: %d)", attempt, s.maxRetries, backoff, yahooLimiter.GetInFlight())
 			time.Sleep(backoff)
 		}
 
-		// Apply rate limiting
-		s.rateLimit()
-
 		resp, err = s.client.Do(req)
+
 		if err == nil && resp.StatusCode == 200 {
+			circuitBreaker.RecordSuccess()
 			return resp, nil
 		}
 
-		// Log error for retry
+		// Log error with status code breakdown
 		if err != nil {
 			log.Printf("Request failed (attempt %d): %v", attempt+1, err)
+			circuitBreaker.RecordFailure(0)
 		} else {
-			log.Printf("Request failed (attempt %d): status code %d", attempt+1, resp.StatusCode)
+			log.Printf("Request failed (attempt %d): status %d (inFlight: %d)", attempt+1, resp.StatusCode, yahooLimiter.GetInFlight())
+
+			// Record failure for circuit breaker
+			if resp.StatusCode >= 500 || resp.StatusCode == 429 || resp.StatusCode == 403 {
+				circuitBreaker.RecordFailure(resp.StatusCode)
+			}
+
 			if resp.Body != nil {
 				resp.Body.Close()
 			}
+
+			// Longer backoff for server errors (500/503)
+			if resp.StatusCode >= 500 && attempt < s.maxRetries {
+				serverBackoff := time.Duration(math.Pow(2, float64(attempt+2))) * s.retryDelay
+				if serverBackoff > 60*time.Second {
+					serverBackoff = 60 * time.Second
+				}
+				log.Printf("Server error %d, backing off for %v", resp.StatusCode, serverBackoff)
+				time.Sleep(serverBackoff)
+			}
 		}
 
-		// Don't retry on client errors (4xx)
-		if resp != nil && resp.StatusCode >= 400 && resp.StatusCode < 500 {
+		// Don't retry on client errors (4xx except 429)
+		if resp != nil && resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != 429 {
 			break
 		}
 	}
@@ -205,10 +252,21 @@ func (s *Scraper) ScrapeProperty(inputURL string) (*models.Property, error) {
 		normalizedURL = normalizeURL(canonicalURL)
 	}
 
+	// Extract Yahoo property ID from URL
+	yahooPropertyID, err := extractYahooPropertyID(normalizedURL)
+	if err != nil {
+		log.Printf("[ScrapeProperty] Warning: Could not extract Yahoo property ID from %s: %v", normalizedURL, err)
+		// Fallback to URL hash for non-standard URLs
+		hash := md5.Sum([]byte(normalizedURL))
+		yahooPropertyID = hex.EncodeToString(hash[:])
+	}
+
 	// Extract metadata
 	property := &models.Property{
-		DetailURL: normalizedURL,
-		FetchedAt: time.Now(),
+		Source:           "yahoo",
+		SourcePropertyID: yahooPropertyID,
+		DetailURL:        normalizedURL,
+		FetchedAt:        time.Now(),
 	}
 
 	// Try to get og:title
@@ -245,8 +303,10 @@ func (s *Scraper) ScrapeProperty(inputURL string) (*models.Property, error) {
 	// Extract additional details from the page
 	s.extractDetailFields(doc, property)
 
-	// Generate ID from normalized URL hash
-	hash := md5.Sum([]byte(normalizedURL))
+	// Generate internal ID from source + source_property_id
+	// This ensures consistent ID generation across the application
+	idSource := property.Source + ":" + property.SourcePropertyID
+	hash := md5.Sum([]byte(idSource))
 	property.ID = hex.EncodeToString(hash[:])
 
 	// Validate required fields
@@ -516,4 +576,32 @@ func (s *Scraper) verifyImageURL(imageURL string) bool {
 
 	log.Printf("[verifyImageURL] Image verified successfully: %s", imageURL)
 	return true
+}
+
+// extractYahooPropertyID extracts Yahoo property ID from URL
+// Example: https://realestate.yahoo.co.jp/rent/detail/000008250678c0a0c9accff94eab13c4c687966f0698
+// Returns: 000008250678c0a0c9accff94eab13c4c687966f0698
+func extractYahooPropertyID(detailURL string) (string, error) {
+	// Split by /detail/
+	parts := strings.Split(detailURL, "/detail/")
+	if len(parts) != 2 {
+		return "", fmt.Errorf("invalid Yahoo URL format (missing /detail/): %s", detailURL)
+	}
+
+	// Get the part after /detail/ and remove query params and trailing slash
+	propertyID := strings.Split(parts[1], "?")[0]
+	propertyID = strings.TrimSuffix(propertyID, "/")
+
+	// Validate length (Yahoo property IDs are 48 hex characters)
+	if len(propertyID) != 48 {
+		return "", fmt.Errorf("unexpected property ID length %d (expected 48): %s", len(propertyID), propertyID)
+	}
+
+	// Validate that it's a hex string
+	hexPattern := regexp.MustCompile(`^[0-9a-f]{48}$`)
+	if !hexPattern.MatchString(propertyID) {
+		return "", fmt.Errorf("invalid Yahoo property ID format (not hex): %s", propertyID)
+	}
+
+	return propertyID, nil
 }

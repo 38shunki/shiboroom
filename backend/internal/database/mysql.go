@@ -64,6 +64,8 @@ func (gdb *GormDB) InitSchema() error {
 		&models.Property{},
 		&models.PropertySnapshot{},
 		&models.PropertyChange{},
+		&models.DeleteLog{},
+		&models.DetailScrapeQueue{},
 	)
 }
 

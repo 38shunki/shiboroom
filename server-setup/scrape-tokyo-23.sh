@@ -68,10 +68,10 @@ for ward_info in "${TOKYO_23_WARDS[@]}"; do
 
         echo -n "  [p${page}] "
 
-        # API呼び出し (concurrency=10で並列処理)
+        # API呼び出し (concurrency=3で並列処理 - Yahoo側の制限対策)
         RESPONSE=$(curl -s -X POST "${API_URL}/api/scrape/list" \
             -H "Content-Type: application/json" \
-            -d "{\"url\":\"${LIST_URL}\",\"concurrency\":10}" 2>&1)
+            -d "{\"url\":\"${LIST_URL}\",\"concurrency\":3}" 2>&1)
 
         # レスポンス確認
         if echo "$RESPONSE" | grep -q "scraped\|found"; then

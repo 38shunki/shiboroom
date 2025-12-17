@@ -8,6 +8,7 @@ import (
 	"os"
 	"real-estate-portal/internal/config"
 	"real-estate-portal/internal/database"
+	"real-estate-portal/internal/handlers"
 	"real-estate-portal/internal/models"
 	"real-estate-portal/internal/ratelimit"
 	"real-estate-portal/internal/scheduler"
@@ -155,6 +156,9 @@ func main() {
 	r.GET("/health", healthCheck)
 	r.GET("/api/properties", getProperties)
 	r.GET("/api/properties/:id", getProperty)
+	r.POST("/api/properties/:id/exclude", excludeProperty)
+	r.POST("/api/properties/:id/unexclude", unexcludeProperty)
+	r.GET("/api/properties/excluded/list", getExcludedProperties)
 
 	// Scraping routes with rate limiting
 	r.POST("/api/scrape", rateLimitMiddleware(), scrapeURL)
@@ -175,6 +179,35 @@ func main() {
 	r.GET("/api/search/facets", getSearchFacets)
 	r.POST("/api/search/reindex", reindexAllProperties)
 	r.GET("/api/filter", filterProperties)
+
+	// Admin API routes (requires authentication in production)
+	if gormDB != nil {
+		sqlDB, _ := gormDB.GetDB()
+		adminHandler := handlers.NewAdminHandler(sqlDB, appScheduler)
+
+		admin := r.Group("/api/admin")
+		{
+			// Statistics
+			admin.GET("/stats", adminHandler.GetStats)
+			admin.GET("/activity", adminHandler.GetRecentActivity)
+			admin.GET("/area-stats", adminHandler.GetAreaStats)
+			admin.GET("/price-distribution", adminHandler.GetPriceDistribution)
+
+			// Scraping control
+			admin.POST("/scraping/trigger", adminHandler.TriggerScraping)
+			admin.GET("/scraping/status", adminHandler.GetScrapingStatus)
+
+			// Cleanup operations
+			admin.POST("/cleanup/run", adminHandler.RunCleanup)
+			admin.GET("/cleanup/logs", adminHandler.GetDeleteLogs)
+
+			// Property history
+			admin.GET("/properties/:id/history", adminHandler.GetPropertyHistory)
+			admin.GET("/changes/recent", adminHandler.GetRecentChanges)
+		}
+
+		log.Println("Admin API routes registered at /api/admin/*")
+	}
 
 	port := getEnv("PORT", "8084")
 	log.Printf("Server starting on port %s", port)
@@ -371,8 +404,127 @@ func scrapeListPage(c *gin.Context) {
 		propertyURLs = propertyURLs[:req.Limit]
 	}
 
-	// Step 2: Scrape properties concurrently
-	log.Printf("Starting concurrent scraping with %d workers", req.Concurrency)
+	// Step 2: Check which properties already exist (differential scraping)
+	log.Printf("Checking for existing properties...")
+	existingURLs := make(map[string]bool)
+	newURLs := []string{}
+
+	for _, url := range propertyURLs {
+		// Extract Yahoo property ID from URL for efficient lookup
+		normalizedURL := normalizeURLForCheck(url)
+		parts := strings.Split(normalizedURL, "/detail/")
+		if len(parts) == 2 {
+			propertyID := strings.Split(parts[1], "?")[0]
+			propertyID = strings.TrimSuffix(propertyID, "/")
+
+			// Check if property exists with this source_property_id
+			var count int64
+			if gormDB != nil {
+				gormDB.DB.Model(&models.Property{}).Where("source = ? AND source_property_id = ?", "yahoo", propertyID).Count(&count)
+			} else {
+				// Fallback: check by URL
+				var existingProp models.Property
+				err := db.GetPropertyByURL(normalizedURL, &existingProp)
+				if err == nil {
+					count = 1
+				}
+			}
+
+			if count > 0 {
+				existingURLs[url] = true
+				// Update last_seen_at for existing property
+				if gormDB != nil {
+					gormDB.DB.Model(&models.Property{}).
+						Where("source = ? AND source_property_id = ?", "yahoo", propertyID).
+						Update("last_seen_at", time.Now())
+				}
+			} else {
+				newURLs = append(newURLs, url)
+			}
+		} else {
+			// If URL doesn't match expected format, treat as new
+			newURLs = append(newURLs, url)
+		}
+	}
+
+	log.Printf("Found %d existing properties (last_seen_at updated), %d new properties to scrape", len(existingURLs), len(newURLs))
+
+	// Step 2.5: Add new properties to the detail_scrape_queue
+	if gormDB != nil && len(newURLs) > 0 {
+		for _, url := range newURLs {
+			// Extract property ID from URL
+			normalizedURL := normalizeURLForCheck(url)
+			parts := strings.Split(normalizedURL, "/detail/")
+			if len(parts) == 2 {
+				propertyID := strings.Split(parts[1], "?")[0]
+				propertyID = strings.TrimSuffix(propertyID, "/")
+
+				// Add to queue (upsert to avoid duplicates)
+				queue := models.DetailScrapeQueue{
+					Source:           "yahoo",
+					SourcePropertyID: propertyID,
+					DetailURL:        normalizedURL,
+					Status:           models.QueueStatusPending,
+					Priority:         0,
+				}
+
+				// Use FirstOrCreate to avoid duplicates
+				result := gormDB.DB.Where("source = ? AND source_property_id = ? AND status IN ?",
+					queue.Source, queue.SourcePropertyID, []string{models.QueueStatusPending, models.QueueStatusProcessing}).
+					FirstOrCreate(&queue)
+
+				if result.Error != nil {
+					log.Printf("Warning: Failed to add %s to queue: %v", propertyID, result.Error)
+				}
+			}
+		}
+		log.Printf("✅ Added %d new properties to detail_scrape_queue", len(newURLs))
+	}
+
+	// Step 3: Process from queue (up to MaxDetailScrapePerRun)
+	const MaxDetailScrapePerRun = 20
+	var propertyURLs []string
+	skippedInQueue := 0
+
+	if gormDB != nil {
+		// Fetch pending items from queue
+		var queueItems []models.DetailScrapeQueue
+		err := gormDB.DB.Where("status = ? AND (next_retry_at IS NULL OR next_retry_at <= ?)",
+			models.QueueStatusPending, time.Now()).
+			Order("priority DESC, created_at ASC").
+			Limit(MaxDetailScrapePerRun).
+			Find(&queueItems).Error
+
+		if err != nil {
+			log.Printf("Error fetching from queue: %v", err)
+		} else {
+			for _, item := range queueItems {
+				propertyURLs = append(propertyURLs, item.DetailURL)
+				// Mark as processing
+				gormDB.DB.Model(&item).Update("status", models.QueueStatusProcessing)
+			}
+
+			// Count remaining in queue
+			var remainingCount int64
+			gormDB.DB.Model(&models.DetailScrapeQueue{}).
+				Where("status = ?", models.QueueStatusPending).
+				Count(&remainingCount)
+			skippedInQueue = int(remainingCount)
+
+			log.Printf("📋 Processing %d properties from queue (%d remaining)", len(propertyURLs), skippedInQueue)
+		}
+	} else {
+		// Fallback: use newURLs directly (old behavior)
+		propertyURLs = newURLs
+		if len(propertyURLs) > MaxDetailScrapePerRun {
+			skippedInQueue = len(propertyURLs) - MaxDetailScrapePerRun
+			propertyURLs = propertyURLs[:MaxDetailScrapePerRun]
+			log.Printf("⚠️  Burst control: limiting detail scrape to %d properties (%d deferred)", MaxDetailScrapePerRun, skippedInQueue)
+		}
+	}
+
+	// Step 4: Scrape properties concurrently
+	log.Printf("Starting concurrent scraping with %d workers for %d new properties", req.Concurrency, len(propertyURLs))
 
 	type result struct {
 		property *models.Property
@@ -401,6 +553,49 @@ func scrapeListPage(c *gin.Context) {
 
 	for i := 0; i < len(propertyURLs); i++ {
 		res := <-results
+
+		// Update queue status based on result
+		if gormDB != nil {
+			normalizedURL := normalizeURLForCheck(res.url)
+			parts := strings.Split(normalizedURL, "/detail/")
+			if len(parts) == 2 {
+				propertyID := strings.Split(parts[1], "?")[0]
+				propertyID = strings.TrimSuffix(propertyID, "/")
+
+				if res.err != nil {
+					// Mark as failed with retry
+					var queueItem models.DetailScrapeQueue
+					if err := gormDB.DB.Where("source = ? AND source_property_id = ?", "yahoo", propertyID).
+						First(&queueItem).Error; err == nil {
+
+						queueItem.Attempts++
+						queueItem.LastError = res.err.Error()
+
+						if queueItem.Attempts >= models.MaxRetryAttempts {
+							queueItem.Status = models.QueueStatusFailed
+							log.Printf("❌ Queue item %s marked as failed after %d attempts", propertyID, queueItem.Attempts)
+						} else {
+							queueItem.Status = models.QueueStatusPending
+							nextRetry := time.Now().Add(models.GetNextRetryDelay(queueItem.Attempts))
+							queueItem.NextRetryAt = &nextRetry
+							log.Printf("🔄 Queue item %s retry scheduled for %v (attempt %d/%d)",
+								propertyID, nextRetry.Format("15:04"), queueItem.Attempts, models.MaxRetryAttempts)
+						}
+
+						gormDB.DB.Save(&queueItem)
+					}
+				} else {
+					// Mark as done
+					now := time.Now()
+					gormDB.DB.Model(&models.DetailScrapeQueue{}).
+						Where("source = ? AND source_property_id = ?", "yahoo", propertyID).
+						Updates(map[string]interface{}{
+							"status":       models.QueueStatusDone,
+							"completed_at": now,
+						})
+				}
+			}
+		}
 
 		if res.err != nil {
 			errors = append(errors, fmt.Sprintf("%s: %v", res.url, res.err))
@@ -433,14 +628,18 @@ func scrapeListPage(c *gin.Context) {
 		}
 	}
 
-	log.Printf("Scraping complete: %d successful, %d failed out of %d total", len(properties), len(errors), len(propertyURLs))
+	totalFound := len(existingURLs) + len(newURLs)
+	log.Printf("Scraping complete: %d existing (updated last_seen_at), %d new scraped, %d failed, %d in queue", len(existingURLs), len(properties), len(errors), skippedInQueue)
 
 	c.JSON(http.StatusOK, gin.H{
-		"found":      len(propertyURLs),
-		"scraped":    len(properties),
-		"failed":     len(errors),
-		"errors":     errors,
-		"properties": properties,
+		"found":         totalFound,
+		"existing":      len(existingURLs),
+		"new":           len(newURLs),
+		"scraped":       len(properties),
+		"failed":        len(errors),
+		"queue_pending": skippedInQueue,
+		"errors":        errors,
+		"properties":    properties,
 	})
 }
 
@@ -958,4 +1157,17 @@ func reindexAllProperties(c *gin.Context) {
 		"indexed":       successCount,
 		"failed":        failCount,
 	})
+}
+
+// normalizeURLForCheck normalizes a URL for existence checking
+func normalizeURLForCheck(rawURL string) string {
+	// Remove query parameters and trailing slash
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	u.RawQuery = ""
+	u.Fragment = ""
+	normalized := strings.TrimSuffix(u.String(), "/")
+	return normalized
 }

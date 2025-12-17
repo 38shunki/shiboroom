@@ -1,146 +1,207 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
 
-##
-## Real Estate Portal デプロイスクリプト
-## ドメイン: shiboroom.com
-##
+# Unified Deployment Script for shiboroom.com
+# Deploy both frontend and backend to production server
 
-PROJECT_ROOT="$(cd "$(dirname "$0")" && pwd)"
-BACKEND_SRC="$PROJECT_ROOT/backend"
-FRONTEND_SRC="$PROJECT_ROOT/frontend-next"
-BUILD_DIR="$PROJECT_ROOT/.deploy-build"
-BACKEND_BIN_LOCAL="$BUILD_DIR/shiboroom-api-linux-amd64"
+set -e  # Exit on error
 
-# サーバー側
-REMOTE_HOST="grik@162.43.74.38"
-REMOTE_APP_ROOT="/var/www/shiboroom"
-REMOTE_BACKEND_BIN="$REMOTE_APP_ROOT/backend/shiboroom-api"
-REMOTE_FRONTEND_DIR="$REMOTE_APP_ROOT/frontend"
-REMOTE_CONFIG_DIR="$REMOTE_APP_ROOT/config"
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
 
-echo "==== [0] ビルド用ディレクトリ作成 ===="
-mkdir -p "$BUILD_DIR"
+# Configuration
+SERVER="grik@162.43.74.38"
+PROJECT_ROOT="/Users/shu/Documents/dev/real-estate-portal"
 
-########################################
-# [1] Go バックエンド ビルド（ローカル → Linux バイナリ）
-########################################
-echo "==== [1] Go バックエンド ビルド ===="
-cd "$PROJECT_ROOT"
+# Parse arguments
+DEPLOY_FRONTEND=false
+DEPLOY_BACKEND=false
 
-if command -v go >/dev/null 2>&1; then
-  echo "→ ローカルの go でビルドします"
-  (
-    cd "$BACKEND_SRC"
-    echo "  - APIサーバーをビルド"
-    GOOS=linux GOARCH=amd64 go build -o "$BACKEND_BIN_LOCAL" ./cmd/api
-  )
+if [ $# -eq 0 ]; then
+  # No arguments: deploy both
+  DEPLOY_FRONTEND=true
+  DEPLOY_BACKEND=true
 else
-  echo "→ go がローカルに無いので Docker(golang) でビルドします"
-  docker run --rm \
-    -v "$PROJECT_ROOT":/app \
-    -w /app/backend \
-    golang:1.23 \
-    bash -c "go mod tidy && go mod download && GOOS=linux GOARCH=amd64 go build -o /app/.deploy-build/shiboroom-api-linux-amd64 ./cmd/api"
+  # Parse arguments
+  for arg in "$@"; do
+    case $arg in
+      frontend|front|fe)
+        DEPLOY_FRONTEND=true
+        ;;
+      backend|back|be)
+        DEPLOY_BACKEND=true
+        ;;
+      all|both)
+        DEPLOY_FRONTEND=true
+        DEPLOY_BACKEND=true
+        ;;
+      *)
+        echo -e "${RED}Unknown argument: $arg${NC}"
+        echo "Usage: $0 [frontend|backend|all]"
+        echo "  No arguments = deploy both"
+        exit 1
+        ;;
+    esac
+  done
 fi
 
-echo "  ビルド済みバイナリ: $BACKEND_BIN_LOCAL"
+echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
+echo -e "${BLUE}║   shiboroom.com Deployment Script     ║${NC}"
+echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
+echo ""
 
-########################################
-# [2] Next.js フロントエンド ビルド（ローカル）
-########################################
-echo "==== [2] Next.js フロントエンド ビルド ===="
-cd "$FRONTEND_SRC"
+# ============================================
+# Backend Deployment
+# ============================================
+if [ "$DEPLOY_BACKEND" = true ]; then
+  echo -e "${YELLOW}📦 [1/2] Backend Deployment${NC}"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-if [ -f package-lock.json ]; then
-  echo "→ npm ci を実行..."
-  npm ci
-else
-  echo "→ npm install を実行..."
-  npm install
+  cd "$PROJECT_ROOT/backend"
+
+  echo "🔨 Building Go binary for Linux..."
+  GOOS=linux GOARCH=amd64 go build -o shiboroom-api ./cmd/api
+
+  echo "📤 Uploading to server..."
+  scp shiboroom-api "$SERVER:/tmp/"
+
+  echo "🚀 Deploying on server..."
+  ssh "$SERVER" << 'ENDSSH'
+    # Backup
+    if [ -f /var/www/shiboroom/shiboroom-api ]; then
+      echo "💾 Backing up current binary..."
+      sudo cp /var/www/shiboroom/shiboroom-api /var/www/shiboroom/shiboroom-api.backup
+    fi
+
+    # Install
+    echo "📂 Installing new binary..."
+    sudo mv /tmp/shiboroom-api /var/www/shiboroom/
+    sudo chown grik:grik /var/www/shiboroom/shiboroom-api
+    sudo chmod +x /var/www/shiboroom/shiboroom-api
+
+    # Restart
+    echo "🔄 Restarting backend service..."
+    sudo systemctl restart shiboroom-backend
+
+    # Verify
+    sleep 2
+    if systemctl is-active --quiet shiboroom-backend; then
+      echo "✅ Backend service is running!"
+    else
+      echo "❌ Backend failed to start!"
+      sudo journalctl -u shiboroom-backend -n 10 --no-pager
+      exit 1
+    fi
+ENDSSH
+
+  # Clean up
+  rm -f "$PROJECT_ROOT/backend/shiboroom-api"
+
+  echo -e "${GREEN}✅ Backend deployed successfully!${NC}"
+  echo ""
 fi
 
-echo "→ 本番環境用にビルドします (NODE_ENV=production)"
-export NODE_ENV=production
-export NEXT_PUBLIC_API_URL=https://shiboroom.com
-npm run build
+# ============================================
+# Frontend Deployment
+# ============================================
+if [ "$DEPLOY_FRONTEND" = true ]; then
+  echo -e "${YELLOW}🎨 [2/2] Frontend Deployment${NC}"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-echo "  Next.js build 完了"
+  # Pre-deployment cleanup - remove conflicting app directory locally
+  echo "🧹 Pre-deployment cleanup..."
+  if [ -d "$PROJECT_ROOT/frontend/app" ]; then
+    echo "   Removing local app/ directory to prevent routing conflicts..."
+    rm -rf "$PROJECT_ROOT/frontend/app"
+  fi
 
-########################################
-# [3] フロントエンド成果物をサーバーへ反映
-########################################
-echo "==== [3] フロントエンドをサーバーへデプロイ ===="
-
-# サーバー側ディレクトリを事前作成
-ssh "$REMOTE_HOST" "mkdir -p ${REMOTE_FRONTEND_DIR}/{.next/{standalone,static},public}"
-ssh "$REMOTE_HOST" "mkdir -p ${REMOTE_APP_ROOT}/backend"
-ssh "$REMOTE_HOST" "mkdir -p ${REMOTE_CONFIG_DIR}"
-
-# .next/standalone
-rsync -avz --delete \
-  .next/standalone/ \
-  "${REMOTE_HOST}:${REMOTE_FRONTEND_DIR}/.next/standalone/"
-
-# .next/static
-rsync -avz --delete \
-  .next/static/ \
-  "${REMOTE_HOST}:${REMOTE_FRONTEND_DIR}/.next/static/"
-
-# public（存在する場合のみ）
-if [ -d "public" ]; then
+  echo "📦 Syncing source code to server..."
   rsync -avz --delete \
-    public/ \
-    "${REMOTE_HOST}:${REMOTE_FRONTEND_DIR}/public/"
-else
-  echo "  public ディレクトリが存在しないためスキップ"
+    --exclude 'node_modules' \
+    --exclude '.next' \
+    --exclude '.git' \
+    --exclude '.env.local' \
+    --quiet \
+    "$PROJECT_ROOT/frontend/" "$SERVER:/var/www/shiboroom/frontend/"
+
+  echo "🔨 Building on server..."
+  ssh "$SERVER" << 'ENDSSH'
+    cd /var/www/shiboroom/frontend
+
+    # Critical: Remove conflicting directories and files
+    echo "🧹 Removing conflicting directories..."
+    rm -rf app  # Remove root app/ directory (causes Pages Router fallback)
+    rm -f .env.local  # Remove local env file (would override production)
+
+    # Install dependencies if needed
+    if [ ! -d "node_modules" ]; then
+      echo "📥 Installing dependencies..."
+      npm install --quiet
+    fi
+
+    # Clean build
+    echo "🧹 Cleaning old build..."
+    rm -rf .next
+
+    # Build with production environment
+    echo "🏗️  Building with production environment..."
+    NODE_ENV=production npm run build
+
+    # Verify App Router was used (not Pages Router)
+    if [ -d ".next/server/app" ]; then
+      echo "✅ App Router build verified"
+    else
+      echo "⚠️  Warning: Build may not be using App Router"
+    fi
+
+    # Verify production API URL is in build
+    if grep -q "shiboroom.com" .next/static/chunks/app/page*.js 2>/dev/null || \
+       grep -q "shiboroom.com" .next/server/app/page.js 2>/dev/null; then
+      echo "✅ Production API URL verified in build"
+    else
+      echo "⚠️  Warning: Could not verify production API URL in build"
+    fi
+
+    # Copy static files
+    echo "📂 Copying static files..."
+    cp -r .next/static .next/standalone/.next/
+    cp -r public .next/standalone/
+
+    # Restart service
+    echo "🔄 Restarting frontend service..."
+    sudo systemctl restart shiboroom-frontend
+
+    # Verify
+    sleep 2
+    if systemctl is-active --quiet shiboroom-frontend; then
+      echo "✅ Frontend service is running!"
+    else
+      echo "❌ Frontend failed to start!"
+      sudo journalctl -u shiboroom-frontend -n 10 --no-pager
+      exit 1
+    fi
+ENDSSH
+
+  echo -e "${GREEN}✅ Frontend deployed successfully!${NC}"
+  echo ""
 fi
 
-# 設定ファイルも同期
-rsync -avz \
-  next.config.js package.json \
-  "${REMOTE_HOST}:${REMOTE_FRONTEND_DIR}/"
-
-echo "==== [3.5] 静的ファイルをstandaloneディレクトリにコピー ===="
-ssh "$REMOTE_HOST" << 'EOF'
-set -e
-echo "→ .next/static をコピー"
-cp -r /var/www/shiboroom/frontend/.next/static /var/www/shiboroom/frontend/.next/standalone/.next/static
-echo "→ public をコピー（存在する場合）"
-if [ -d "/var/www/shiboroom/frontend/public" ]; then
-  cp -r /var/www/shiboroom/frontend/public /var/www/shiboroom/frontend/.next/standalone/public
+# ============================================
+# Summary
+# ============================================
+echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
+echo -e "${BLUE}║          Deployment Complete!          ║${NC}"
+echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
+echo ""
+if [ "$DEPLOY_BACKEND" = true ]; then
+  echo -e "  🔌 Backend API: ${GREEN}https://shiboroom.com/api${NC}"
 fi
-echo "✅ 静的ファイルのコピー完了"
-EOF
-
-########################################
-# [4] バックエンド設定ファイルをデプロイ
-########################################
-echo "==== [4] バックエンド設定ファイルをデプロイ (スキップ) ===="
-echo "→ 設定ファイルは手動管理のためデプロイをスキップします"
-# NOTE: scraper_config.yaml contains sensitive data (passwords) and is managed manually on the server
-# rsync -avz "$BACKEND_SRC/config/scraper_config.yaml" "${REMOTE_HOST}:${REMOTE_CONFIG_DIR}/"
-
-########################################
-# [5] バックエンドバイナリをサーバーへ反映
-########################################
-echo "==== [5] バックエンドバイナリをサーバーへデプロイ ===="
-
-# 別名でアップロードしてから置き換え
-scp "$BACKEND_BIN_LOCAL" "${REMOTE_HOST}:${REMOTE_APP_ROOT}/backend/shiboroom-api.new"
-ssh "$REMOTE_HOST" "chmod +x ${REMOTE_APP_ROOT}/backend/shiboroom-api.new && mv ${REMOTE_APP_ROOT}/backend/shiboroom-api.new ${REMOTE_BACKEND_BIN}"
-
-########################################
-# [6] サーバー側サービス再起動
-########################################
-echo "==== [6] サーバー側サービス再起動 ===="
-
-# サーバー側の再起動スクリプトを実行
-ssh "$REMOTE_HOST" "/var/www/shiboroom/restart-shiboroom-services.sh"
-
+if [ "$DEPLOY_FRONTEND" = true ]; then
+  echo -e "  🌐 Frontend:    ${GREEN}https://shiboroom.com${NC}"
+fi
 echo ""
-echo "==== ✅ ローカルビルド → 本番デプロイ 完了 ===="
-echo ""
-echo "アクセスURL:"
-echo "  - https://shiboroom.com"
+echo -e "${YELLOW}💡 Tip: Visit https://shiboroom.com to verify the deployment${NC}"
 echo ""
