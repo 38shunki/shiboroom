@@ -780,7 +780,6 @@ body {
   transition: transform 0.1s ease;
   position: relative;
   z-index: 2;
-  margin-top: -7px;
 }
 .dual-range input[type="range"]::-webkit-slider-thumb:hover {
   transform: scale(1.1);
@@ -796,7 +795,6 @@ body {
   transition: transform 0.1s ease;
   position: relative;
   z-index: 2;
-  margin-top: -7px;
 }
 .dual-range input[type="range"]::-moz-range-thumb:hover {
   transform: scale(1.1);
@@ -804,11 +802,23 @@ body {
 
 .range-slider {
   width: 100%;
-  height: 4px;
+  height: 18px;
   -webkit-appearance: none;
-  background: var(--border);
+  background: transparent;
   border-radius: 2px;
   outline: none;
+}
+.range-slider::-webkit-slider-runnable-track {
+  width: 100%;
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+}
+.range-slider::-moz-range-track {
+  width: 100%;
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
 }
 .range-slider::-webkit-slider-thumb {
   -webkit-appearance: none;
@@ -819,7 +829,6 @@ body {
   border-radius: 50%;
   cursor: pointer;
   transition: transform 0.1s ease;
-  margin-top: -7px;
 }
 .range-slider::-webkit-slider-thumb:hover { transform: scale(1.1); }
 .range-slider::-moz-range-thumb {
@@ -830,7 +839,6 @@ body {
   border-radius: 50%;
   cursor: pointer;
   transition: transform 0.1s ease;
-  margin-top: -7px;
 }
 .range-slider::-moz-range-thumb:hover { transform: scale(1.1); }
 
