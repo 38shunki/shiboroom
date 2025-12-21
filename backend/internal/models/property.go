@@ -24,7 +24,7 @@ type Property struct {
 	// ステータス管理（論理削除）
 	Status     PropertyStatus `gorm:"type:varchar(20);not null;default:'active';index" json:"status"`
 	RemovedAt  *time.Time     `gorm:"type:datetime" json:"removed_at,omitempty"`
-	LastSeenAt time.Time      `gorm:"type:datetime;not null;index" json:"last_seen_at"` // 最終確認日時
+	LastSeenAt *time.Time     `gorm:"type:datetime;index" json:"last_seen_at,omitempty"` // 最終確認日時
 
 	// タイムスタンプ
 	FetchedAt time.Time `gorm:"type:datetime;not null" json:"fetched_at"`
@@ -52,7 +52,10 @@ func (p *Property) IsActive() bool {
 
 // DaysSinceLastSeen returns days since last seen
 func (p *Property) DaysSinceLastSeen() int {
-	return int(time.Since(p.LastSeenAt).Hours() / 24)
+	if p.LastSeenAt == nil {
+		return 9999 // Never seen
+	}
+	return int(time.Since(*p.LastSeenAt).Hours() / 24)
 }
 
 // IsLikelyExpired checks if property is likely expired (not seen for 7+ days)
@@ -67,7 +70,8 @@ func (p *Property) IsProbablyExpired() bool {
 
 // UpdateLastSeen updates the last seen timestamp
 func (p *Property) UpdateLastSeen() {
-	p.LastSeenAt = time.Now()
+	now := time.Now()
+	p.LastSeenAt = &now
 }
 
 // IsSourcePropertyIDExtracted checks if the source_property_id was extracted from URL (true)

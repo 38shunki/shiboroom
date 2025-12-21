@@ -1,6 +1,7 @@
 package ratelimit
 
 import (
+	"log"
 	"math/rand"
 	"sync"
 	"time"
@@ -14,6 +15,14 @@ type YahooLimiter struct {
 	baseDelay      time.Duration // Base delay between requests
 	jitter         time.Duration // Random jitter to add
 	lastRequest    time.Time
+}
+
+// DetailLimiter manages very slow rate limiting for detail pages (5 per hour)
+type DetailLimiter struct {
+	mutex         sync.Mutex
+	requestTimes  []time.Time
+	maxPerHour    int
+	windowDuration time.Duration
 }
 
 // NewYahooLimiter creates a new rate limiter for Yahoo scraping
@@ -62,4 +71,81 @@ func (yl *YahooLimiter) GetInFlight() int {
 	yl.mutex.Lock()
 	defer yl.mutex.Unlock()
 	return yl.currentInFlight
+}
+
+// NewDetailLimiter creates a new detail page rate limiter
+func NewDetailLimiter(maxPerHour int) *DetailLimiter {
+	return &DetailLimiter{
+		requestTimes:   make([]time.Time, 0),
+		maxPerHour:     maxPerHour,
+		windowDuration: 1 * time.Hour,
+	}
+}
+
+// Acquire waits until it's safe to make a detail page request
+func (dl *DetailLimiter) Acquire() {
+	dl.mutex.Lock()
+	defer dl.mutex.Unlock()
+
+	now := time.Now()
+	windowStart := now.Add(-dl.windowDuration)
+
+	// Remove old requests outside the window
+	validRequests := make([]time.Time, 0)
+	for _, t := range dl.requestTimes {
+		if t.After(windowStart) {
+			validRequests = append(validRequests, t)
+		}
+	}
+	dl.requestTimes = validRequests
+
+	// If we've hit the limit, wait until the oldest request expires
+	for len(dl.requestTimes) >= dl.maxPerHour {
+		oldestRequest := dl.requestTimes[0]
+		waitUntil := oldestRequest.Add(dl.windowDuration)
+		waitDuration := time.Until(waitUntil)
+
+		if waitDuration > 0 {
+			log.Printf("[DetailLimiter] Limit reached (%d/%d per hour). Waiting %v...",
+				len(dl.requestTimes), dl.maxPerHour, waitDuration)
+			dl.mutex.Unlock()
+			time.Sleep(waitDuration + 1*time.Second)
+			dl.mutex.Lock()
+
+			// Re-check after waiting
+			now = time.Now()
+			windowStart = now.Add(-dl.windowDuration)
+			validRequests = make([]time.Time, 0)
+			for _, t := range dl.requestTimes {
+				if t.After(windowStart) {
+					validRequests = append(validRequests, t)
+				}
+			}
+			dl.requestTimes = validRequests
+		} else {
+			break
+		}
+	}
+
+	// Record this request
+	dl.requestTimes = append(dl.requestTimes, now)
+	log.Printf("[DetailLimiter] Request allowed (%d/%d used in last hour)",
+		len(dl.requestTimes), dl.maxPerHour)
+}
+
+// GetUsage returns current usage count in the window
+func (dl *DetailLimiter) GetUsage() int {
+	dl.mutex.Lock()
+	defer dl.mutex.Unlock()
+
+	now := time.Now()
+	windowStart := now.Add(-dl.windowDuration)
+
+	count := 0
+	for _, t := range dl.requestTimes {
+		if t.After(windowStart) {
+			count++
+		}
+	}
+	return count
 }

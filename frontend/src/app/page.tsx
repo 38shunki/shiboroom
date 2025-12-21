@@ -1127,6 +1127,18 @@ export default function Home() {
           </div>
         </section>
       )}
+
+      {/* Footer */}
+      <footer className="footer">
+        <div className="footer-inner">
+          <div className="footer-links">
+            <a href="/terms" className="footer-link">利用規約</a>
+            <a href="/privacy" className="footer-link">プライバシーポリシー</a>
+            <a href="/tokushoho" className="footer-link">特定商取引法に基づく表記</a>
+          </div>
+          <p className="footer-copy">© 2025 shiboroom</p>
+        </div>
+      </footer>
     </div>
   )
 }

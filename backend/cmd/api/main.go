@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"real-estate-portal/internal/config"
 	"real-estate-portal/internal/database"
@@ -156,9 +157,6 @@ func main() {
 	r.GET("/health", healthCheck)
 	r.GET("/api/properties", getProperties)
 	r.GET("/api/properties/:id", getProperty)
-	r.POST("/api/properties/:id/exclude", excludeProperty)
-	r.POST("/api/properties/:id/unexclude", unexcludeProperty)
-	r.GET("/api/properties/excluded/list", getExcludedProperties)
 
 	// Scraping routes with rate limiting
 	r.POST("/api/scrape", rateLimitMiddleware(), scrapeURL)
@@ -420,21 +418,13 @@ func scrapeListPage(c *gin.Context) {
 			// Check if property exists with this source_property_id
 			var count int64
 			if gormDB != nil {
-				gormDB.DB.Model(&models.Property{}).Where("source = ? AND source_property_id = ?", "yahoo", propertyID).Count(&count)
-			} else {
-				// Fallback: check by URL
-				var existingProp models.Property
-				err := db.GetPropertyByURL(normalizedURL, &existingProp)
-				if err == nil {
-					count = 1
-				}
+				gormDB.DB().Model(&models.Property{}).Where("source = ? AND source_property_id = ?", "yahoo", propertyID).Count(&count)
 			}
-
 			if count > 0 {
 				existingURLs[url] = true
 				// Update last_seen_at for existing property
 				if gormDB != nil {
-					gormDB.DB.Model(&models.Property{}).
+					gormDB.DB().Model(&models.Property{}).
 						Where("source = ? AND source_property_id = ?", "yahoo", propertyID).
 						Update("last_seen_at", time.Now())
 				}
@@ -469,7 +459,7 @@ func scrapeListPage(c *gin.Context) {
 				}
 
 				// Use FirstOrCreate to avoid duplicates
-				result := gormDB.DB.Where("source = ? AND source_property_id = ? AND status IN ?",
+				result := gormDB.DB().Where("source = ? AND source_property_id = ? AND status IN ?",
 					queue.Source, queue.SourcePropertyID, []string{models.QueueStatusPending, models.QueueStatusProcessing}).
 					FirstOrCreate(&queue)
 
@@ -483,13 +473,13 @@ func scrapeListPage(c *gin.Context) {
 
 	// Step 3: Process from queue (up to MaxDetailScrapePerRun)
 	const MaxDetailScrapePerRun = 20
-	var propertyURLs []string
+	var queuedURLs []string
 	skippedInQueue := 0
 
 	if gormDB != nil {
 		// Fetch pending items from queue
 		var queueItems []models.DetailScrapeQueue
-		err := gormDB.DB.Where("status = ? AND (next_retry_at IS NULL OR next_retry_at <= ?)",
+		err := gormDB.DB().Where("status = ? AND (next_retry_at IS NULL OR next_retry_at <= ?)",
 			models.QueueStatusPending, time.Now()).
 			Order("priority DESC, created_at ASC").
 			Limit(MaxDetailScrapePerRun).
@@ -499,19 +489,19 @@ func scrapeListPage(c *gin.Context) {
 			log.Printf("Error fetching from queue: %v", err)
 		} else {
 			for _, item := range queueItems {
-				propertyURLs = append(propertyURLs, item.DetailURL)
+				queuedURLs = append(queuedURLs, item.DetailURL)
 				// Mark as processing
-				gormDB.DB.Model(&item).Update("status", models.QueueStatusProcessing)
+				gormDB.DB().Model(&item).Update("status", models.QueueStatusProcessing)
 			}
 
 			// Count remaining in queue
 			var remainingCount int64
-			gormDB.DB.Model(&models.DetailScrapeQueue{}).
+			gormDB.DB().Model(&models.DetailScrapeQueue{}).
 				Where("status = ?", models.QueueStatusPending).
 				Count(&remainingCount)
 			skippedInQueue = int(remainingCount)
 
-			log.Printf("📋 Processing %d properties from queue (%d remaining)", len(propertyURLs), skippedInQueue)
+			log.Printf("📋 Processing %d properties from queue (%d remaining)", len(queuedURLs), skippedInQueue)
 		}
 	} else {
 		// Fallback: use newURLs directly (old behavior)
@@ -565,7 +555,7 @@ func scrapeListPage(c *gin.Context) {
 				if res.err != nil {
 					// Mark as failed with retry
 					var queueItem models.DetailScrapeQueue
-					if err := gormDB.DB.Where("source = ? AND source_property_id = ?", "yahoo", propertyID).
+					if err := gormDB.DB().Where("source = ? AND source_property_id = ?", "yahoo", propertyID).
 						First(&queueItem).Error; err == nil {
 
 						queueItem.Attempts++
@@ -582,12 +572,12 @@ func scrapeListPage(c *gin.Context) {
 								propertyID, nextRetry.Format("15:04"), queueItem.Attempts, models.MaxRetryAttempts)
 						}
 
-						gormDB.DB.Save(&queueItem)
+						gormDB.DB().Save(&queueItem)
 					}
 				} else {
 					// Mark as done
 					now := time.Now()
-					gormDB.DB.Model(&models.DetailScrapeQueue{}).
+					gormDB.DB().Model(&models.DetailScrapeQueue{}).
 						Where("source = ? AND source_property_id = ?", "yahoo", propertyID).
 						Updates(map[string]interface{}{
 							"status":       models.QueueStatusDone,

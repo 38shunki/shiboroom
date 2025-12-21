@@ -4,9 +4,12 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log"
 	"math"
+	"math/rand"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 	"real-estate-portal/internal/models"
 	"real-estate-portal/internal/ratelimit"
@@ -19,19 +22,23 @@ import (
 )
 
 var (
-	// Global rate limiter for Yahoo Real Estate
-	// Burst control strategy: reduce concurrent requests and increase delay
+	// Global rate limiter for Yahoo Real Estate list pages
+	// Used for list page scraping (search results)
 	yahooLimiter = ratelimit.NewYahooLimiter(
 		1,                     // maxInFlight: 1 concurrent request (avoid burst)
-		2500*time.Millisecond, // baseDelay: 2.5s base
-		1500*time.Millisecond, // jitter: 0-1.5s (total: 2.5-4.0s)
+		8000*time.Millisecond, // baseDelay: 8s base for list pages
+		4000*time.Millisecond, // jitter: 0-4s (total: 8-12s)
 	)
+
+	// Global rate limiter for detail pages
+	// Strictly limits detail pages to 5 per hour to avoid WAF detection
+	detailLimiter = ratelimit.NewDetailLimiter(5) // 5 detail pages per hour max
 
 	// Global circuit breaker to detect WAF blocks
 	// Stricter early detection to avoid prolonged blocks
 	circuitBreaker = NewCircuitBreaker(
-		8,              // failureThreshold: 8 failures out of 20 requests (stricter)
-		1*time.Hour,    // resetTimeout: wait 1 hour before retry
+		8,           // failureThreshold: 8 failures out of 20 requests (stricter)
+		1*time.Hour, // resetTimeout: wait 1 hour before retry
 	)
 )
 
@@ -60,9 +67,21 @@ func NewScraper() *Scraper {
 }
 
 func NewScraperWithConfig(config ScraperConfig) *Scraper {
+	// Create cookie jar for session management
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		log.Printf("Warning: Failed to create cookie jar: %v", err)
+		jar = nil
+	}
+
 	return &Scraper{
 		client: &http.Client{
 			Timeout: config.Timeout,
+			Jar:     jar,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				// Follow redirects while maintaining cookies
+				return nil
+			},
 		},
 		maxRetries:   config.MaxRetries,
 		retryDelay:   config.RetryDelay,
@@ -81,6 +100,78 @@ func (s *Scraper) rateLimit() {
 		time.Sleep(s.requestDelay - elapsed)
 	}
 	s.lastRequestTime = time.Now()
+}
+
+// applyBrowserHeaders sets browser-like headers to avoid bot detection
+func applyBrowserHeaders(req *http.Request, referer string) {
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7")
+	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
+	req.Header.Set("Cache-Control", "no-cache")
+	req.Header.Set("Pragma", "no-cache")
+	req.Header.Set("Upgrade-Insecure-Requests", "1")
+	req.Header.Set("Sec-Fetch-Site", "none")
+	req.Header.Set("Sec-Fetch-Mode", "navigate")
+	req.Header.Set("Sec-Fetch-User", "?1")
+	req.Header.Set("Sec-Fetch-Dest", "document")
+
+	if referer != "" {
+		req.Header.Set("Referer", referer)
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+	}
+}
+
+// isWAFBlock checks if a response indicates a WAF block
+func isWAFBlock(resp *http.Response) bool {
+	if resp.StatusCode != 500 {
+		return false
+	}
+
+	// Read body to check for WAF indicators
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return false
+	}
+
+	// Replace body so it can be read again if needed
+	resp.Body = io.NopCloser(strings.NewReader(string(body)))
+
+	bodyStr := string(body)
+	// Check for Yahoo WAF block message
+	if strings.Contains(bodyStr, "ご覧になろうとしているページは現在表示できません") {
+		log.Printf("[WAF] Detected Yahoo WAF block page")
+		return true
+	}
+
+	return false
+}
+
+// sleepHumanDetailPace simulates human browsing behavior with natural delays
+func sleepHumanDetailPace() {
+	// 80% normal browsing (45-120 seconds)
+	// 20% deep reading (180-420 seconds = 3-7 minutes)
+	p := rand.Float64()
+	var duration time.Duration
+
+	if p < 0.8 {
+		// Normal: 45-120 seconds
+		duration = time.Duration(45+rand.Intn(76)) * time.Second
+	} else {
+		// Deep reading: 180-420 seconds
+		duration = time.Duration(180+rand.Intn(241)) * time.Second
+	}
+
+	log.Printf("[Human Pace] Sleeping for %v to simulate human browsing", duration)
+	time.Sleep(duration)
+}
+
+// sleepHumanListPace simulates human browsing behavior for list pages
+func sleepHumanListPace() {
+	// List pages: 6-15 seconds
+	duration := time.Duration(6+rand.Intn(10)) * time.Second
+	log.Printf("[Human Pace] Sleeping for %v for list page browsing", duration)
+	time.Sleep(duration)
 }
 
 // doRequestWithRetry performs HTTP request with exponential backoff retry
@@ -122,6 +213,15 @@ func (s *Scraper) doRequestWithRetry(req *http.Request) (*http.Response, error) 
 			circuitBreaker.RecordFailure(0)
 		} else {
 			log.Printf("Request failed (attempt %d): status %d (inFlight: %d)", attempt+1, resp.StatusCode, yahooLimiter.GetInFlight())
+
+			// Check for WAF block - immediate failure, no retry
+			if isWAFBlock(resp) {
+				circuitBreaker.RecordFailure(resp.StatusCode)
+				if resp.Body != nil {
+					resp.Body.Close()
+				}
+				return nil, fmt.Errorf("WAF block detected: immediate retreat required")
+			}
 
 			// Record failure for circuit breaker
 			if resp.StatusCode >= 500 || resp.StatusCode == 429 || resp.StatusCode == 403 {
@@ -165,7 +265,8 @@ func (s *Scraper) ScrapeListPage(listURL string) ([]string, error) {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
+	// Apply browser-like headers (no referer for list page)
+	applyBrowserHeaders(req, "")
 
 	resp, err := s.doRequestWithRetry(req)
 	if err != nil {
@@ -174,6 +275,7 @@ func (s *Scraper) ScrapeListPage(listURL string) ([]string, error) {
 	}
 	defer resp.Body.Close()
 
+	// Parse HTML (goquery will read body completely, maintaining connection stability)
 	doc, err := goquery.NewDocumentFromReader(resp.Body)
 	if err != nil {
 		log.Printf("[ScrapeListPage] Error parsing HTML from %s: %v", listURL, err)
@@ -183,23 +285,38 @@ func (s *Scraper) ScrapeListPage(listURL string) ([]string, error) {
 	var propertyURLs []string
 	seenURLs := make(map[string]bool)
 
-	// Find all links that point to property detail pages
-	// Yahoo Real Estate detail URLs follow the pattern: /rent/detail/
-	doc.Find("a").Each(func(i int, s *goquery.Selection) {
-		if href, exists := s.Attr("href"); exists {
-			// Check if it's a property detail URL
-			if !strings.Contains(href, "/rent/detail/") {
+	// Find all property checkboxes (Yahoo changed HTML structure - property IDs are now in checkbox values)
+	// Property IDs are 48-character hex strings in input._propertyCheckbox value attributes
+	// Note: As of Dec 2024, Yahoo uses 52-char values with "0000" prefix + 48-char ID
+	doc.Find("input._propertyCheckbox").Each(func(i int, s *goquery.Selection) {
+		if value, exists := s.Attr("value"); exists && len(value) >= 48 {
+			var propertyID string
+
+			// Handle different value formats:
+			// - 52 chars: "0000" prefix + 48-char ID (current format as of Dec 2024)
+			// - 49+ chars with "_" prefix: remove "_" then take 48 chars (old format)
+			// - 48 chars: use as-is (fallback)
+			if len(value) == 52 && value[:4] == "0000" {
+				// New format: skip first 4 chars ("0000")
+				propertyID = value[4:52]
+			} else if value[0] == '_' {
+				// Old format with underscore prefix
+				stripped := strings.TrimPrefix(value, "_")
+				if len(stripped) >= 48 {
+					propertyID = stripped[:48]
+				}
+			} else if len(value) >= 48 {
+				// Fallback: take first 48 chars
+				propertyID = value[:48]
+			}
+
+			// Skip if we couldn't extract a valid ID
+			if propertyID == "" || len(propertyID) != 48 {
 				return
 			}
 
-			// Convert relative URL to absolute
-			propertyURL := href
-			if strings.HasPrefix(href, "/") {
-				propertyURL = "https://realestate.yahoo.co.jp" + href
-			} else if !strings.HasPrefix(href, "http") {
-				// Skip invalid URLs
-				return
-			}
+			// Build detail URL
+			propertyURL := "https://realestate.yahoo.co.jp/rent/detail/" + propertyID
 
 			// Normalize URL to avoid duplicates
 			normalizedURL := normalizeURL(propertyURL)
@@ -218,9 +335,20 @@ func (s *Scraper) ScrapeListPage(listURL string) ([]string, error) {
 
 // ScrapeProperty scrapes a property detail page
 func (s *Scraper) ScrapeProperty(inputURL string) (*models.Property, error) {
+	return s.ScrapePropertyWithReferer(inputURL, "")
+}
+
+// ScrapePropertyWithReferer scrapes a property detail page with optional referer
+func (s *Scraper) ScrapePropertyWithReferer(inputURL string, referer string) (*models.Property, error) {
 	// Normalize URL (remove query strings, trailing slash)
 	normalizedURL := normalizeURL(inputURL)
-	log.Printf("[ScrapeProperty] Starting scrape of property: %s (normalized: %s)", inputURL, normalizedURL)
+	log.Printf("[ScrapeProperty] Starting scrape of property: %s (normalized: %s, referer: %s)", inputURL, normalizedURL, referer)
+
+	// Apply detail page rate limiting (5 per hour max)
+	detailLimiter.Acquire()
+
+	// Sleep to simulate human browsing behavior (45-120s, sometimes 3-7 minutes)
+	sleepHumanDetailPace()
 
 	// Fetch the page
 	req, err := http.NewRequest("GET", normalizedURL, nil)
@@ -229,8 +357,8 @@ func (s *Scraper) ScrapeProperty(inputURL string) (*models.Property, error) {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	// Set User-Agent to mimic a browser
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
+	// Apply browser-like headers with referer if provided
+	applyBrowserHeaders(req, referer)
 
 	resp, err := s.doRequestWithRetry(req)
 	if err != nil {

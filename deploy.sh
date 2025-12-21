@@ -62,8 +62,9 @@ if [ "$DEPLOY_BACKEND" = true ]; then
 
   cd "$PROJECT_ROOT/backend"
 
-  echo "🔨 Building Go binary for Linux..."
-  GOOS=linux GOARCH=amd64 go build -o shiboroom-api ./cmd/api
+  echo "🔨 Building Go binary for Linux using Docker..."
+  docker run --rm --platform linux/amd64 -v "$(pwd)":/app -w /app golang:1.23-alpine sh -c \
+    "apk add --no-cache gcc musl-dev && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags '-extldflags \"-static\"' -o shiboroom-api ./cmd/api"
 
   echo "📤 Uploading to server..."
   scp shiboroom-api "$SERVER:/tmp/"
