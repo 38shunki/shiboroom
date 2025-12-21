@@ -55,9 +55,16 @@ func main() {
 	if dbType == "mysql" {
 		log.Println("Using MySQL with GORM")
 		mysqlCfg := appConfig.Database.MySQL
+
+		// Get port as string, handle 0 as empty
+		portStr := ""
+		if mysqlCfg.Port > 0 {
+			portStr = fmt.Sprintf("%d", mysqlCfg.Port)
+		}
+
 		gormDB, err = database.NewGormDB(
 			getEnvOrConfig(mysqlCfg.Host, "DB_HOST", "mysql"),
-			getEnvOrConfig(fmt.Sprintf("%d", mysqlCfg.Port), "DB_PORT", "3306"),
+			getEnvOrConfig(portStr, "DB_PORT", "3306"),
 			getEnvOrConfig(mysqlCfg.User, "DB_USER", "realestate_user"),
 			getEnvOrConfig(mysqlCfg.Password, "DB_PASSWORD", "realestate_pass"),
 			getEnvOrConfig(mysqlCfg.Database, "DB_NAME", "realestate_db"),
@@ -74,9 +81,16 @@ func main() {
 	} else {
 		log.Println("Using PostgreSQL")
 		pgCfg := appConfig.Database.Postgres
+
+		// Get port as string, handle 0 as empty
+		portStr := ""
+		if pgCfg.Port > 0 {
+			portStr = fmt.Sprintf("%d", pgCfg.Port)
+		}
+
 		db, err = database.NewDB(
 			getEnvOrConfig(pgCfg.Host, "DB_HOST", "db"),
-			getEnvOrConfig(fmt.Sprintf("%d", pgCfg.Port), "DB_PORT", "5432"),
+			getEnvOrConfig(portStr, "DB_PORT", "5432"),
 			getEnvOrConfig(pgCfg.User, "DB_USER", "realestate_user"),
 			getEnvOrConfig(pgCfg.Password, "DB_PASSWORD", "realestate_pass"),
 			getEnvOrConfig(pgCfg.Database, "DB_NAME", "realestate_db"),

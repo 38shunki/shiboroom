@@ -1,6 +1,7 @@
 package scraper
 
 import (
+	"compress/gzip"
 	"crypto/md5"
 	"encoding/hex"
 	"fmt"
@@ -275,8 +276,20 @@ func (s *Scraper) ScrapeListPage(listURL string) ([]string, error) {
 	}
 	defer resp.Body.Close()
 
+	// Handle gzip decompression if needed
+	var reader io.Reader = resp.Body
+	if resp.Header.Get("Content-Encoding") == "gzip" {
+		gzipReader, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			log.Printf("[ScrapeListPage] Error creating gzip reader: %v", err)
+			return nil, fmt.Errorf("failed to create gzip reader: %w", err)
+		}
+		defer gzipReader.Close()
+		reader = gzipReader
+	}
+
 	// Parse HTML (goquery will read body completely, maintaining connection stability)
-	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	doc, err := goquery.NewDocumentFromReader(reader)
 	if err != nil {
 		log.Printf("[ScrapeListPage] Error parsing HTML from %s: %v", listURL, err)
 		return nil, fmt.Errorf("failed to parse HTML: %w", err)
@@ -286,46 +299,59 @@ func (s *Scraper) ScrapeListPage(listURL string) ([]string, error) {
 	seenURLs := make(map[string]bool)
 
 	// Find all property checkboxes (Yahoo changed HTML structure - property IDs are now in checkbox values)
-	// Property IDs are 48-character hex strings in input._propertyCheckbox value attributes
-	// Note: As of Dec 2024, Yahoo uses 52-char values with "0000" prefix + 48-char ID
+	// Property IDs are 40-character hex strings (NOT 48) in input._propertyCheckbox value attributes
+	// Note: As of Dec 2024, Yahoo uses these formats:
+	//   - "_0000" prefix + 40-char ID (45 chars total)
+	//   - "0000" prefix + 40-char ID (44 chars total)
+	//   - 40-char ID (no prefix, 40 chars total)
 	doc.Find("input._propertyCheckbox").Each(func(i int, s *goquery.Selection) {
-		if value, exists := s.Attr("value"); exists && len(value) >= 48 {
-			var propertyID string
+		value, exists := s.Attr("value")
 
-			// Handle different value formats:
-			// - 52 chars: "0000" prefix + 48-char ID (current format as of Dec 2024)
-			// - 49+ chars with "_" prefix: remove "_" then take 48 chars (old format)
-			// - 48 chars: use as-is (fallback)
-			if len(value) == 52 && value[:4] == "0000" {
-				// New format: skip first 4 chars ("0000")
-				propertyID = value[4:52]
-			} else if value[0] == '_' {
-				// Old format with underscore prefix
-				stripped := strings.TrimPrefix(value, "_")
-				if len(stripped) >= 48 {
-					propertyID = stripped[:48]
-				}
-			} else if len(value) >= 48 {
-				// Fallback: take first 48 chars
-				propertyID = value[:48]
-			}
+		if !exists {
+			return
+		}
+		if len(value) < 40 {
+			return
+		}
 
-			// Skip if we couldn't extract a valid ID
-			if propertyID == "" || len(propertyID) != 48 {
-				return
-			}
+		var propertyID string
 
-			// Build detail URL
-			propertyURL := "https://realestate.yahoo.co.jp/rent/detail/" + propertyID
+		// Handle different value formats
+		// Yahoo uses mixed formats, all have 40-char hex IDs
+		if len(value) >= 45 && value[:5] == "_0000" {
+			// Format: "_0000" + ID (strip first 5 chars)
+			propertyID = value[5:]
+		} else if len(value) >= 44 && value[:4] == "0000" {
+			// Format: "0000" + ID (strip first 4 chars)
+			propertyID = value[4:]
+		} else if len(value) >= 41 && value[0] == '_' {
+			// Format: "_" + ID (strip underscore)
+			propertyID = strings.TrimPrefix(value, "_")
+		} else {
+			// Fallback: use as-is
+			propertyID = value
+		}
 
-			// Normalize URL to avoid duplicates
-			normalizedURL := normalizeURL(propertyURL)
+		// Trim to 40 chars if longer (some IDs may have trailing data)
+		if len(propertyID) > 40 {
+			propertyID = propertyID[:40]
+		}
 
-			// Add only unique URLs
-			if !seenURLs[normalizedURL] {
-				seenURLs[normalizedURL] = true
-				propertyURLs = append(propertyURLs, normalizedURL)
-			}
+		// Skip if we couldn't extract a valid ID
+		if propertyID == "" || len(propertyID) != 40 {
+			return
+		}
+
+		// Build detail URL
+		propertyURL := "https://realestate.yahoo.co.jp/rent/detail/" + propertyID
+
+		// Normalize URL to avoid duplicates
+		normalizedURL := normalizeURL(propertyURL)
+
+		// Add only unique URLs
+		if !seenURLs[normalizedURL] {
+			seenURLs[normalizedURL] = true
+			propertyURLs = append(propertyURLs, normalizedURL)
 		}
 	})
 
