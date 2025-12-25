@@ -119,6 +119,37 @@ func (gdb *GormDB) GetAllProperties() ([]models.Property, error) {
 	return properties, err
 }
 
+// GetPropertiesWithSort retrieves all properties with custom sorting
+func (gdb *GormDB) GetPropertiesWithSort(sortBy string) ([]models.Property, error) {
+	var properties []models.Property
+
+	// Map sort parameter to SQL ORDER BY clause (MySQL syntax)
+	// Use CASE to put NULLs last for ASC, first for DESC
+	var orderClause string
+	switch sortBy {
+	case "fetched_at", "fetched_at_desc":
+		orderClause = "fetched_at DESC"
+	case "fetched_at_asc":
+		orderClause = "fetched_at ASC"
+	case "rent_asc":
+		orderClause = "CASE WHEN rent IS NULL THEN 1 ELSE 0 END, rent ASC"
+	case "rent_desc":
+		orderClause = "CASE WHEN rent IS NULL THEN 1 ELSE 0 END, rent DESC"
+	case "area_desc":
+		orderClause = "CASE WHEN area IS NULL THEN 1 ELSE 0 END, area DESC"
+	case "walk_time_asc":
+		orderClause = "CASE WHEN walk_time IS NULL THEN 1 ELSE 0 END, walk_time ASC"
+	case "building_age_asc":
+		orderClause = "CASE WHEN building_age IS NULL THEN 1 ELSE 0 END, building_age ASC"
+	default:
+		// Default to newest first (by fetched_at)
+		orderClause = "fetched_at DESC"
+	}
+
+	err := gdb.db.Order(orderClause).Find(&properties).Error
+	return properties, err
+}
+
 // GetPropertyByID retrieves a property by ID
 func (gdb *GormDB) GetPropertyByID(id string) (*models.Property, error) {
 	var property models.Property
@@ -127,6 +158,81 @@ func (gdb *GormDB) GetPropertyByID(id string) (*models.Property, error) {
 		return nil, err
 	}
 	return &property, nil
+}
+
+// savePropertyStations saves property stations within a transaction
+// If stations is empty, does nothing (important: preserves existing data when HTML is missing/blocked)
+func savePropertyStations(tx *gorm.DB, propertyID string, stations []models.PropertyStation) error {
+	if len(stations) == 0 {
+		// Important: Don't delete existing stations if extraction returns empty
+		// (could be due to HTML missing, WAF block, or parsing error)
+		return nil
+	}
+
+	// Delete existing stations for this property
+	if err := tx.Where("property_id = ?", propertyID).Delete(&models.PropertyStation{}).Error; err != nil {
+		return err
+	}
+
+	// Insert all new stations
+	if len(stations) > 0 {
+		if err := tx.Create(&stations).Error; err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// SavePropertyWithStations saves a property and its stations in a transaction
+func (gdb *GormDB) SavePropertyWithStations(p *models.Property, stations []models.PropertyStation) error {
+	// Generate ID from normalized URL if not set
+	if p.ID == "" {
+		normalizedURL := normalizeURL(p.DetailURL)
+		p.ID = generateMD5(normalizedURL)
+	}
+
+	// Set FetchedAt to now if not set
+	if p.FetchedAt.IsZero() {
+		p.FetchedAt = time.Now()
+	}
+
+	// Set default status to active if not set
+	if p.Status == "" {
+		p.Status = models.PropertyStatusActive
+	}
+
+	// Use transaction to save both property and stations
+	return gdb.db.Transaction(func(tx *gorm.DB) error {
+		// Upsert property: try to find existing
+		var existing models.Property
+		result := tx.Where("detail_url = ?", p.DetailURL).First(&existing)
+
+		if result.Error == gorm.ErrRecordNotFound {
+			// Create new property
+			if err := tx.Create(p).Error; err != nil {
+				return err
+			}
+		} else if result.Error != nil {
+			return result.Error
+		} else {
+			// Update existing (keep original CreatedAt, Status, and RemovedAt)
+			p.CreatedAt = existing.CreatedAt
+			p.ID = existing.ID
+			p.Status = existing.Status
+			p.RemovedAt = existing.RemovedAt
+			if err := tx.Save(p).Error; err != nil {
+				return err
+			}
+		}
+
+		// Save stations (only if extraction returned data)
+		if err := savePropertyStations(tx, p.ID, stations); err != nil {
+			return err
+		}
+
+		return nil
+	})
 }
 
 // GetActiveProperties retrieves all active properties

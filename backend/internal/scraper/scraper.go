@@ -57,6 +57,7 @@ type Scraper struct {
 	lastRequestTime       time.Time
 	lastHomepageVisit     time.Time
 	homepageVisitInterval time.Duration
+	lastStations          []StationAccess // Stores stations from the last scrape
 }
 
 type ScraperConfig struct {
@@ -569,6 +570,15 @@ func (s *Scraper) ScrapePropertyWithReferer(inputURL string, referer string) (*m
 	// Extract additional details from the page
 	s.extractDetailFields(doc, property)
 
+	// Extract stations (new: for property_stations table)
+	// Apply backward compatibility by copying sort_order=1 to legacy fields
+	stations := extractStations(doc)
+	applyStationCompatibility(property, stations)
+	// Store stations in scraper for retrieval by API handler
+	s.lastStations = stations
+	// Note: The actual saving to property_stations table happens in the API handler
+	// via gormDB.SavePropertyWithStations()
+
 	// Generate internal ID from source + source_property_id
 	// This ensures consistent ID generation across the application
 	idSource := property.Source + ":" + property.SourcePropertyID
@@ -581,7 +591,7 @@ func (s *Scraper) ScrapePropertyWithReferer(inputURL string, referer string) (*m
 		log.Printf("[ScrapeProperty] Warning: No title found for %s", normalizedURL)
 	}
 
-	log.Printf("[ScrapeProperty] Successfully scraped property %s (ID: %s, Title: %s)", normalizedURL, property.ID, property.Title)
+	log.Printf("[ScrapeProperty] Successfully scraped property %s (ID: %s, Title: %s, Stations: %d)", normalizedURL, property.ID, property.Title, len(stations))
 	return property, nil
 }
 
@@ -1831,6 +1841,51 @@ func extractStations(doc *goquery.Document) []StationAccess {
 	})
 
 	return stations
+}
+
+// convertStationsToModels converts StationAccess to PropertyStation models
+func convertStationsToModels(propertyID string, stations []StationAccess) []models.PropertyStation {
+	result := make([]models.PropertyStation, 0, len(stations))
+	for _, s := range stations {
+		ps := models.PropertyStation{
+			PropertyID:  propertyID,
+			StationName: s.StationName,
+			LineName:    s.LineName,
+			WalkMinutes: s.WalkMinutes,
+			SortOrder:   s.SortOrder,
+		}
+		result = append(result, ps)
+	}
+	return result
+}
+
+// applyStationCompatibility copies the primary station (sort_order=1) to legacy fields
+// for backward compatibility with existing code
+func applyStationCompatibility(prop *models.Property, stations []StationAccess) {
+	if len(stations) == 0 {
+		return
+	}
+
+	// Use the first station (sort_order=1)
+	s0 := stations[0]
+	if s0.StationName != "" {
+		prop.Station = s0.StationName
+	}
+
+	// Only update walk_time if it's a valid walk time (> 0)
+	if s0.WalkMinutes > 0 {
+		prop.WalkTime = &s0.WalkMinutes
+	}
+}
+
+// GetLastStations returns the stations from the last scrape operation
+func (s *Scraper) GetLastStations() []StationAccess {
+	return s.lastStations
+}
+
+// GetLastStationsAsModels returns the stations from the last scrape as PropertyStation models
+func (s *Scraper) GetLastStationsAsModels(propertyID string) []models.PropertyStation {
+	return convertStationsToModels(propertyID, s.lastStations)
 }
 
 // extractAddress extracts address from the document

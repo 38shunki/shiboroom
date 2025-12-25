@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 var (
@@ -31,6 +33,7 @@ var (
 	appConfig       *config.Config
 	rateLimiter     *ratelimit.RateLimiter
 	appScheduler    *scheduler.Scheduler
+	queueWorker     *scheduler.QueueWorker
 	snapshotService *snapshot.Service
 )
 
@@ -154,6 +157,12 @@ func main() {
 			log.Printf("Warning: Failed to start scheduler: %v", err)
 		}
 		defer appScheduler.Stop()
+
+		// Initialize and start queue worker
+		queueWorker = scheduler.NewQueueWorker(sqlDB)
+		queueWorker.Start()
+		defer queueWorker.Stop()
+		log.Println("Queue worker started")
 	}
 
 	// Setup Gin router
@@ -185,6 +194,9 @@ func main() {
 	r.POST("/api/scheduler/run", triggerScheduledScraping)
 	r.GET("/api/properties/:id/history", getPropertyHistory)
 	r.GET("/api/changes/recent", getRecentChanges)
+
+	// Queue worker stats endpoint
+	r.GET("/api/queue/stats", getQueueStats)
 
 	r.GET("/api/search", searchProperties)
 	r.POST("/api/search/advanced", advancedSearchProperties)
@@ -239,10 +251,13 @@ func getProperties(c *gin.Context) {
 	var properties []models.Property
 	var err error
 
+	// Get sort parameter (default: fetched_at for newest first)
+	sortBy := c.DefaultQuery("sort", "fetched_at")
+
 	if gormDB != nil {
-		properties, err = gormDB.GetAllProperties()
+		properties, err = gormDB.GetPropertiesWithSort(sortBy)
 	} else {
-		properties, err = db.GetAllProperties()
+		properties, err = db.GetPropertiesWithSort(sortBy)
 	}
 
 	if err != nil {
@@ -296,6 +311,9 @@ func scrapeURL(c *gin.Context) {
 		return
 	}
 
+	// Apply DetailLimiter for single property scraping (5 per hour max)
+	scraper.DetailLimiter.Acquire("single")
+
 	// Scrape the property
 	s := createScraper()
 	property, err := s.ScrapeProperty(req.URL)
@@ -304,10 +322,13 @@ func scrapeURL(c *gin.Context) {
 		return
 	}
 
-	// Save to database
+	// Save to database with stations (if using GORM)
 	if gormDB != nil {
-		err = gormDB.SaveProperty(property)
+		// Get stations from scraper and convert to models
+		stations := s.GetLastStationsAsModels(property.ID)
+		err = gormDB.SavePropertyWithStations(property, stations)
 	} else {
+		// Legacy database doesn't support stations
 		err = db.SaveProperty(property)
 	}
 
@@ -463,189 +484,94 @@ func scrapeListPage(c *gin.Context) {
 				propertyID := strings.Split(parts[1], "?")[0]
 				propertyID = strings.TrimSuffix(propertyID, "/")
 
-				// Add to queue (upsert to avoid duplicates)
-				queue := models.DetailScrapeQueue{
-					Source:           "yahoo",
-					SourcePropertyID: propertyID,
-					DetailURL:        normalizedURL,
-					Status:           models.QueueStatusPending,
-					Priority:         0,
-				}
+				// Add to queue with proper failed handling
+				var existing models.DetailScrapeQueue
+				err := gormDB.DB().Where("source = ? AND source_property_id = ?", "yahoo", propertyID).
+					First(&existing).Error
 
-				// Use FirstOrCreate to avoid duplicates
-				result := gormDB.DB().Where("source = ? AND source_property_id = ? AND status IN ?",
-					queue.Source, queue.SourcePropertyID, []string{models.QueueStatusPending, models.QueueStatusProcessing}).
-					FirstOrCreate(&queue)
-
-				if result.Error != nil {
-					log.Printf("Warning: Failed to add %s to queue: %v", propertyID, result.Error)
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					// No existing record - create new
+					queue := models.DetailScrapeQueue{
+						Source:           "yahoo",
+						SourcePropertyID: propertyID,
+						DetailURL:        normalizedURL,
+						Status:           models.QueueStatusPending,
+						Priority:         0,
+						Attempts:         0,
+					}
+					if createErr := gormDB.DB().Create(&queue).Error; createErr != nil {
+						log.Printf("Warning: Failed to create queue for %s: %v", propertyID, createErr)
+					}
+				} else if err != nil {
+					log.Printf("Warning: Failed to check queue for %s: %v", propertyID, err)
+				} else {
+					// Record exists - handle based on status
+					switch existing.Status {
+					case models.QueueStatusPending, models.QueueStatusProcessing:
+						// Already in queue, do nothing
+					case models.QueueStatusFailed:
+						// Retry failed items by resetting to pending
+						updates := map[string]interface{}{
+							"status":        models.QueueStatusPending,
+							"attempts":      0,
+							"last_error":    "",
+							"next_retry_at": nil,
+						}
+						if updateErr := gormDB.DB().Model(&existing).Updates(updates).Error; updateErr != nil {
+							log.Printf("Warning: Failed to reset failed queue for %s: %v", propertyID, updateErr)
+						}
+					case models.QueueStatusPermanentFail:
+						// Don't retry permanent failures (404, etc)
+					case models.QueueStatusDone:
+						// Already successfully scraped, do nothing
+					}
 				}
 			}
 		}
 		log.Printf("✅ Added %d new properties to detail_scrape_queue", len(newURLs))
 	}
 
-	// Step 3: Process from queue (up to MaxDetailScrapePerRun)
-	const MaxDetailScrapePerRun = 20
-	var queuedURLs []string
-	skippedInQueue := 0
+	// Step 3: QUEUE-ONLY MODE - Do NOT process immediately
+	// Detail scraping should ONLY happen via queue workers/scheduler
+	// This prevents accidental bursts and keeps rate limiting centralized
+	log.Printf("✅ List scraping complete. URLs added to queue for processing by scheduler/worker.")
 
+	// Count queue status for response
+	var queueStats struct {
+		Pending    int64
+		Processing int64
+		Done       int64
+		Failed     int64
+	}
 	if gormDB != nil {
-		// Fetch pending items from queue
-		var queueItems []models.DetailScrapeQueue
-		err := gormDB.DB().Where("status = ? AND (next_retry_at IS NULL OR next_retry_at <= ?)",
-			models.QueueStatusPending, time.Now()).
-			Order("priority DESC, created_at ASC").
-			Limit(MaxDetailScrapePerRun).
-			Find(&queueItems).Error
-
-		if err != nil {
-			log.Printf("Error fetching from queue: %v", err)
-		} else {
-			for _, item := range queueItems {
-				queuedURLs = append(queuedURLs, item.DetailURL)
-				// Mark as processing
-				gormDB.DB().Model(&item).Update("status", models.QueueStatusProcessing)
-			}
-
-			// Count remaining in queue
-			var remainingCount int64
-			gormDB.DB().Model(&models.DetailScrapeQueue{}).
-				Where("status = ?", models.QueueStatusPending).
-				Count(&remainingCount)
-			skippedInQueue = int(remainingCount)
-
-			log.Printf("📋 Processing %d properties from queue (%d remaining)", len(queuedURLs), skippedInQueue)
-		}
-	} else {
-		// Fallback: use newURLs directly (old behavior)
-		propertyURLs = newURLs
-		if len(propertyURLs) > MaxDetailScrapePerRun {
-			skippedInQueue = len(propertyURLs) - MaxDetailScrapePerRun
-			propertyURLs = propertyURLs[:MaxDetailScrapePerRun]
-			log.Printf("⚠️  Burst control: limiting detail scrape to %d properties (%d deferred)", MaxDetailScrapePerRun, skippedInQueue)
-		}
+		gormDB.DB().Model(&models.DetailScrapeQueue{}).Where("status = ?", models.QueueStatusPending).Count(&queueStats.Pending)
+		gormDB.DB().Model(&models.DetailScrapeQueue{}).Where("status = ?", models.QueueStatusProcessing).Count(&queueStats.Processing)
+		gormDB.DB().Model(&models.DetailScrapeQueue{}).Where("status = ?", models.QueueStatusDone).Count(&queueStats.Done)
+		gormDB.DB().Model(&models.DetailScrapeQueue{}).Where("status = ?", models.QueueStatusFailed).Count(&queueStats.Failed)
 	}
 
-	// Step 4: Scrape properties concurrently
-	log.Printf("Starting concurrent scraping with %d workers for %d new properties", req.Concurrency, len(propertyURLs))
+	// NOTE: Removed immediate detail scraping from here
+	// All detail scraping now happens via:
+	// - POST /api/scrape (single, with DetailLimiter)
+	// - Scheduler/worker (processes queue with rate limits)
 
-	type result struct {
-		property *models.Property
-		err      error
-		url      string
-	}
-
-	results := make(chan result, len(propertyURLs))
-	semaphore := make(chan struct{}, req.Concurrency)
-
-	// Launch goroutines for each URL
-	for _, url := range propertyURLs {
-		go func(propertyURL string) {
-			semaphore <- struct{}{} // Acquire semaphore
-			defer func() { <-semaphore }() // Release semaphore
-
-			scraper := createScraper()
-			property, err := scraper.ScrapeProperty(propertyURL)
-			results <- result{property: property, err: err, url: propertyURL}
-		}(url)
-	}
-
-	// Collect results
-	var properties []models.Property
-	var errors []string
-
-	for i := 0; i < len(propertyURLs); i++ {
-		res := <-results
-
-		// Update queue status based on result
-		if gormDB != nil {
-			normalizedURL := normalizeURLForCheck(res.url)
-			parts := strings.Split(normalizedURL, "/detail/")
-			if len(parts) == 2 {
-				propertyID := strings.Split(parts[1], "?")[0]
-				propertyID = strings.TrimSuffix(propertyID, "/")
-
-				if res.err != nil {
-					// Mark as failed with retry
-					var queueItem models.DetailScrapeQueue
-					if err := gormDB.DB().Where("source = ? AND source_property_id = ?", "yahoo", propertyID).
-						First(&queueItem).Error; err == nil {
-
-						queueItem.Attempts++
-						queueItem.LastError = res.err.Error()
-
-						if queueItem.Attempts >= models.MaxRetryAttempts {
-							queueItem.Status = models.QueueStatusFailed
-							log.Printf("❌ Queue item %s marked as failed after %d attempts", propertyID, queueItem.Attempts)
-						} else {
-							queueItem.Status = models.QueueStatusPending
-							nextRetry := time.Now().Add(models.GetNextRetryDelay(queueItem.Attempts))
-							queueItem.NextRetryAt = &nextRetry
-							log.Printf("🔄 Queue item %s retry scheduled for %v (attempt %d/%d)",
-								propertyID, nextRetry.Format("15:04"), queueItem.Attempts, models.MaxRetryAttempts)
-						}
-
-						gormDB.DB().Save(&queueItem)
-					}
-				} else {
-					// Mark as done
-					now := time.Now()
-					gormDB.DB().Model(&models.DetailScrapeQueue{}).
-						Where("source = ? AND source_property_id = ?", "yahoo", propertyID).
-						Updates(map[string]interface{}{
-							"status":       models.QueueStatusDone,
-							"completed_at": now,
-						})
-				}
-			}
-		}
-
-		if res.err != nil {
-			errors = append(errors, fmt.Sprintf("%s: %v", res.url, res.err))
-			log.Printf("Failed to scrape %s: %v", res.url, res.err)
-			continue
-		}
-
-		// Save to database
-		var saveErr error
-		if gormDB != nil {
-			saveErr = gormDB.SaveProperty(res.property)
-		} else {
-			saveErr = db.SaveProperty(res.property)
-		}
-
-		if saveErr != nil {
-			errors = append(errors, fmt.Sprintf("%s: %v", res.url, saveErr))
-			log.Printf("Failed to save %s: %v", res.url, saveErr)
-			continue
-		}
-
-		properties = append(properties, *res.property)
-		log.Printf("Successfully scraped and saved property %d/%d: %s", i+1, len(propertyURLs), res.url)
-	}
-
-	// Index all properties
-	if len(properties) > 0 {
-		if err := searchClient.IndexProperties(properties); err != nil {
-			log.Printf("Warning: Failed to index properties: %v", err)
-		}
-	}
-
-	totalFound := len(existingURLs) + len(newURLs)
-	log.Printf("Scraping complete: %d existing (updated last_seen_at), %d new scraped, %d failed, %d in queue", len(existingURLs), len(properties), len(errors), skippedInQueue)
-
+	// Return queue-only response
 	c.JSON(http.StatusOK, gin.H{
-		"found":         totalFound,
-		"existing":      len(existingURLs),
-		"new":           len(newURLs),
-		"scraped":       len(properties),
-		"failed":        len(errors),
-		"queue_pending": skippedInQueue,
-		"errors":        errors,
-		"properties":    properties,
+		"message":         "List page scraped successfully. URLs added to queue.",
+		"urls_found":      len(propertyURLs),
+		"existing":        len(existingURLs),
+		"new_to_queue":    len(newURLs),
+		"queue_status": gin.H{
+			"pending":    queueStats.Pending,
+			"processing": queueStats.Processing,
+			"done":       queueStats.Done,
+			"failed":     queueStats.Failed,
+		},
 	})
 }
+
+// REMOVED: Immediate detail scraping logic
+// All detail scraping moved to queue worker/scheduler only
 
 func scrapeAndUpdate(c *gin.Context) {
 	var req struct {
@@ -684,12 +610,23 @@ func scrapeAndUpdate(c *gin.Context) {
 	// Step 2: Scrape each property
 	var scrapedProperties []models.Property
 	var scrapeErrors []string
+	var permanentFailures []string
 
 	for i, url := range propertyURLs {
 		log.Printf("Scraping property %d/%d: %s", i+1, len(propertyURLs), url)
 
 		property, err := s.ScrapeProperty(url)
 		if err != nil {
+			errMsg := err.Error()
+
+			// Check for permanent failure (404)
+			if strings.Contains(errMsg, "permanent_fail") || strings.Contains(errMsg, "404") {
+				log.Printf("Permanent failure (404) for %s - not retrying", url)
+				permanentFailures = append(permanentFailures, fmt.Sprintf("%s: 404 Not Found (permanent)", url))
+				continue
+			}
+
+			// Other errors (WAF, timeout, etc.)
 			scrapeErrors = append(scrapeErrors, fmt.Sprintf("%s: %v", url, err))
 			continue
 		}
@@ -742,12 +679,13 @@ func scrapeAndUpdate(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"scraped":      len(scrapedProperties),
-		"new":          len(newIDs),
-		"removed":      len(removedIDs),
-		"updated":      len(updatedProperties),
-		"scrapeErrors": scrapeErrors,
-		"saveErrors":   saveErrors,
+		"scraped":           len(scrapedProperties),
+		"new":               len(newIDs),
+		"removed":           len(removedIDs),
+		"updated":           len(updatedProperties),
+		"scrapeErrors":      scrapeErrors,
+		"permanentFailures": permanentFailures,
+		"saveErrors":        saveErrors,
 	})
 }
 
@@ -918,6 +856,19 @@ func rateLimitMiddleware() gin.HandlerFunc {
 // getRateLimitStats returns current rate limiter statistics
 func getRateLimitStats(c *gin.Context) {
 	stats := rateLimiter.GetStats()
+	c.JSON(http.StatusOK, stats)
+}
+
+// getQueueStats returns current queue worker statistics
+func getQueueStats(c *gin.Context) {
+	if queueWorker == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error": "Queue worker is not available (requires MySQL/GORM)",
+		})
+		return
+	}
+
+	stats := queueWorker.GetQueueStats()
 	c.JSON(http.StatusOK, stats)
 }
 
