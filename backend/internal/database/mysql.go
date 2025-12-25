@@ -44,6 +44,11 @@ func NewGormDB(host, port, user, password, dbname string) (*GormDB, error) {
 	return &GormDB{db: db}, nil
 }
 
+// NewGormDBFromDB creates a GormDB wrapper from an existing gorm.DB instance
+func NewGormDBFromDB(db *gorm.DB) *GormDB {
+	return &GormDB{db: db}
+}
+
 // DB returns the underlying gorm.DB instance
 func (gdb *GormDB) DB() *gorm.DB {
 	return gdb.db

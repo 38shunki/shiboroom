@@ -327,6 +327,15 @@ func scrapeURL(c *gin.Context) {
 		// Get stations from scraper and convert to models
 		stations := s.GetLastStationsAsModels(property.ID)
 		err = gormDB.SavePropertyWithStations(property, stations)
+
+		// Log station save operation
+		if err == nil {
+			if len(stations) == 0 {
+				log.Printf("[stations] property_id=%s stations_len=0 skip_delete_preserve_existing", property.ID)
+			} else {
+				log.Printf("[stations] property_id=%s stations_len=%d saved", property.ID, len(stations))
+			}
+		}
 	} else {
 		// Legacy database doesn't support stations
 		err = db.SaveProperty(property)
