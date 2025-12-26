@@ -28,10 +28,11 @@ func (DetailScrapeQueue) TableName() string {
 
 // Status constants
 const (
-	QueueStatusPending    = "pending"
-	QueueStatusProcessing = "processing"
-	QueueStatusDone       = "done"
-	QueueStatusFailed     = "failed"
+	QueueStatusPending      = "pending"
+	QueueStatusProcessing   = "processing"
+	QueueStatusDone         = "done"
+	QueueStatusFailed       = "failed"
+	QueueStatusPermanentFail = "permanent_fail" // 404 or other non-retryable failures
 )
 
 // MaxRetryAttempts before marking as permanently failed

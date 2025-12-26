@@ -248,16 +248,54 @@ func healthCheck(c *gin.Context) {
 }
 
 func getProperties(c *gin.Context) {
+	// Build filters from query parameters
+	filters := database.PropertyFilters{
+		Station:  c.Query("station"),   // e.g., ?station=新宿
+		Line:     c.Query("line"),      // e.g., ?line=大江戸線
+		WalkMode: c.DefaultQuery("walk_mode", "nearest"), // "nearest" or "any"
+		SortBy:   c.DefaultQuery("sort", "fetched_at"),
+	}
+
+	// Parse max_walk parameter
+	if maxWalkStr := c.Query("max_walk"); maxWalkStr != "" {
+		if maxWalk, parseErr := strconv.Atoi(maxWalkStr); parseErr == nil && maxWalk > 0 {
+			filters.MaxWalk = maxWalk
+		}
+	}
+
+	// Parse pagination parameters (limit and offset)
+	if limitStr := c.Query("limit"); limitStr != "" {
+		if limit, parseErr := strconv.Atoi(limitStr); parseErr == nil && limit > 0 {
+			filters.Limit = limit
+		}
+	}
+
+	if offsetStr := c.Query("offset"); offsetStr != "" {
+		if offset, parseErr := strconv.Atoi(offsetStr); parseErr == nil && offset >= 0 {
+			filters.Offset = offset
+		}
+	}
+
+	// Use paginated endpoint if limit is specified or if using GORM
+	if gormDB != nil && (filters.Limit > 0 || c.Query("limit") != "") {
+		result, err := gormDB.GetPropertiesWithFiltersPaginated(filters)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, result)
+		return
+	}
+
+	// Legacy non-paginated response for backward compatibility
 	var properties []models.Property
 	var err error
 
-	// Get sort parameter (default: fetched_at for newest first)
-	sortBy := c.DefaultQuery("sort", "fetched_at")
-
 	if gormDB != nil {
-		properties, err = gormDB.GetPropertiesWithSort(sortBy)
+		properties, err = gormDB.GetPropertiesWithFilters(filters)
 	} else {
-		properties, err = db.GetPropertiesWithSort(sortBy)
+		// Legacy database doesn't support filters, fall back to sort-only
+		properties, err = db.GetPropertiesWithSort(filters.SortBy)
 	}
 
 	if err != nil {
@@ -284,7 +322,19 @@ func getProperty(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, property)
+	// Fetch stations if using GORM
+	var stations []models.PropertyStation
+	if gormDB != nil {
+		stations, _ = gormDB.GetPropertyStations(id)
+	}
+
+	// Create response with stations
+	response := gin.H{
+		"property": property,
+		"stations": stations,
+	}
+
+	c.JSON(http.StatusOK, response)
 }
 
 // createScraper creates a new scraper instance with configuration

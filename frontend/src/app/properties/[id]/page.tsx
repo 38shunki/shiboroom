@@ -13,14 +13,46 @@ interface Property {
   image_url?: string
   rent?: number
   floor_plan?: string
+  floor_plan_details?: string
   area?: number
   walk_time?: number
   station?: string
   address?: string
   building_age?: number
+  building_name?: string
+  building_type?: string
+  structure?: string
+  direction?: string
   floor?: number
+  floor_label?: string
+  contract_period?: string
+  insurance?: string
+  parking?: string
+  facilities?: string
+  features?: string
+  room_layout_image_url?: string
+  management_fee?: string
+  deposit?: string
+  key_money?: string
+  guarantor_deposit?: string
+  security_deposit?: string
+  move_in_date?: string
+  conditions?: string
+  notes?: string
   status: string
   fetched_at: string
+  created_at: string
+  updated_at: string
+  removed_at?: string
+}
+
+interface PropertyStation {
+  id: number
+  property_id: string
+  station_name: string
+  line_name: string
+  walk_minutes: number
+  sort_order: number
   created_at: string
   updated_at: string
 }
@@ -61,6 +93,7 @@ export default function PropertyDetailPage() {
   const propertyId = params.id as string
 
   const [property, setProperty] = useState<Property | null>(null)
+  const [stations, setStations] = useState<PropertyStation[]>([])
   const [snapshots, setSnapshots] = useState<PropertySnapshot[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -82,8 +115,17 @@ export default function PropertyDetailPage() {
       if (!propertyResponse.ok) {
         throw new Error('物件が見つかりませんでした')
       }
-      const propertyData = await propertyResponse.json()
-      setProperty(propertyData)
+      const responseData = await propertyResponse.json()
+
+      // Handle new response format: {property, stations}
+      if (responseData.property) {
+        setProperty(responseData.property)
+        setStations(responseData.stations || [])
+      } else {
+        // Fallback for old format (direct property object)
+        setProperty(responseData)
+        setStations([])
+      }
 
       // Fetch snapshot history
       const historyResponse = await fetch(`${API_URL}/api/properties/${propertyId}/history?limit=30`)
@@ -126,6 +168,121 @@ export default function PropertyDetailPage() {
     return labels[changeType] || changeType
   }
 
+  const translateFacility = (facility: string): string => {
+    const translations: Record<string, string> = {
+      // 設備（英語フルネーム）
+      'air_conditioner': 'エアコン',
+      'auto_lock': 'オートロック',
+      'balcony': 'バルコニー',
+      'bath_toilet_separate': 'バス・トイレ別',
+      'bathroom_dryer': '浴室乾燥機',
+      'flooring': 'フローリング',
+      'laundry_space': '室内洗濯機置場',
+      'second_floor_plus': '2階以上',
+      'washbasin': '洗面所独立',
+      'independent_washbasin': '洗面所独立',
+      'system_kitchen': 'システムキッチン',
+      'corner_room': '角部屋',
+      'delivery_box': '宅配ボックス',
+      'bike_parking': '駐輪場',
+      'elevator': 'エレベーター',
+      'walk_in_closet': 'ウォークインクローゼット',
+      'shower_toilet': '温水洗浄便座',
+      'tile_flooring': 'タイル張り',
+      'gas_stove': 'ガスコンロ対応',
+      'shoe_box': 'シューズボックス',
+      'intercom': 'TVモニタ付インターホン',
+      'security_camera': '防犯カメラ',
+      'indoor_washroom': '室内洗濯機置場',
+      'loft': 'ロフト',
+      'garden': '専用庭',
+      'parking': '駐車場',
+      'optical_fiber': '光ファイバー',
+      'broadband': 'インターネット対応',
+      'catv': 'CATV',
+      'pet_friendly': 'ペット相談',
+      'south_facing': '南向き',
+      'two_family': '二人入居可',
+      'storage': 'トランクルーム',
+      'guarantor_unnecessary': '保証人不要',
+      'deposit_free': '敷金なし',
+      'key_money_free': '礼金なし',
+      // 特徴（2文字コード）
+      'ac': 'エアコン',
+      'al': 'オートロック',
+      'bc': 'バルコニー',
+      'bd': '浴室乾燥機',
+      'bt': 'バス・トイレ別',
+      'bs': 'BS',
+      'cs': 'CS',
+      'ct': 'CATVインターネット',
+      'cr': '角部屋',
+      'db': '宅配ボックス',
+      'em': 'エレベーター',
+      'ep': '駐輪場',
+      'ev': 'エレベーター',
+      'fl': 'フローリング',
+      'gr': 'ガスコンロ',
+      'mp': '駐車場',
+      'sf': '2階以上',
+      'sk': 'システムキッチン',
+      'tr': 'トランクルーム',
+      'tw': '二人入居可',
+      'vb': 'TVモニタ付インターホン',
+      'wc': 'ウォークインクローゼット',
+      'wg': '温水洗浄便座',
+      'wl': '室内洗濯機置場',
+      'wm': '洗面所独立',
+      'cl': 'クローゼット',
+      'ff': 'フリーレント',
+      'fr': '冷蔵庫',
+      'ma': '管理人',
+      'nt': 'インターネット',
+      'rm': 'リフォーム済',
+      'sn': '新築',
+      'so': '南向き',
+      'tm': 'タイル',
+      'ws': '洗濯機',
+      'ih': 'IHコンロ',
+      'le': 'LED照明',
+      'lf': 'ロフト',
+      'sc': '宅配ボックス',
+      'tf': '都市ガス',
+      'bn': 'BS/CS対応',
+      'hb': '高速インターネット',
+      'it': 'インターネット対応'
+    }
+    return translations[facility] || facility
+  }
+
+  const decodeUnicodeEscapes = (str: string): string => {
+    // Decode Unicode escape sequences like \u968E to proper characters
+    try {
+      return str.replace(/\\u([\dA-Fa-f]{4})/g, (match, grp) => {
+        return String.fromCharCode(parseInt(grp, 16))
+      }).replace(/\\\//g, '/')  // Also decode \/ to /
+    } catch {
+      return str
+    }
+  }
+
+  const parseFacilitiesString = (facilitiesStr: string): string[] => {
+    try {
+      // Handle JSON array format
+      const parsed = JSON.parse(facilitiesStr)
+      if (Array.isArray(parsed)) {
+        return parsed
+      }
+      return [facilitiesStr]
+    } catch {
+      // Handle plain string or " / " separated format
+      if (facilitiesStr.includes(' / ')) {
+        return facilitiesStr.split(' / ')
+      }
+      return [facilitiesStr]
+    }
+  }
+
   if (loading) {
     return (
       <div className="container" style={{ padding: '40px 20px', textAlign: 'center' }}>
@@ -149,28 +306,29 @@ export default function PropertyDetailPage() {
   return (
     <div className="property-detail-page">
       <header className="detail-header">
-        <div className="header-inner">
+        <div className="header-top">
           <Link href="/" className="back-button">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
               <path d="m15 18-6-6 6-6"/>
             </svg>
-            一覧に戻る
+            <span>一覧に戻る</span>
           </Link>
-          <nav className="tab-nav">
-            <button
-              className={`tab-btn ${activeTab === 'overview' ? 'active' : ''}`}
-              onClick={() => setActiveTab('overview')}
-            >
-              物件詳細
-            </button>
-            <button
-              className={`tab-btn ${activeTab === 'history' ? 'active' : ''}`}
-              onClick={() => setActiveTab('history')}
-            >
-              変更履歴 {snapshots.length > 0 && `(${snapshots.length})`}
-            </button>
-          </nav>
         </div>
+        <nav className="tab-nav">
+          <button
+            className={`tab-btn ${activeTab === 'overview' ? 'active' : ''}`}
+            onClick={() => setActiveTab('overview')}
+          >
+            物件詳細
+          </button>
+          <button
+            className={`tab-btn ${activeTab === 'history' ? 'active' : ''}`}
+            onClick={() => setActiveTab('history')}
+          >
+            変更履歴
+            {snapshots.length > 0 && <span className="tab-count">{snapshots.length}</span>}
+          </button>
+        </nav>
       </header>
 
       <main className="detail-content">
@@ -196,10 +354,22 @@ export default function PropertyDetailPage() {
               <div className="detail-card">
                 <h3 className="detail-card-title">基本情報</h3>
                 <dl className="detail-list">
+                  {property.building_name && (
+                    <>
+                      <dt>建物名</dt>
+                      <dd>{property.building_name}</dd>
+                    </>
+                  )}
                   {property.floor_plan && (
                     <>
                       <dt>間取り</dt>
                       <dd>{property.floor_plan}</dd>
+                    </>
+                  )}
+                  {property.floor_plan_details && (
+                    <>
+                      <dt>間取り詳細</dt>
+                      <dd>{property.floor_plan_details}</dd>
                     </>
                   )}
                   {property.area && (
@@ -208,13 +378,37 @@ export default function PropertyDetailPage() {
                       <dd>{property.area}㎡</dd>
                     </>
                   )}
+                  {property.direction && (
+                    <>
+                      <dt>向き</dt>
+                      <dd>{property.direction}</dd>
+                    </>
+                  )}
+                </dl>
+              </div>
+
+              <div className="detail-card">
+                <h3 className="detail-card-title">建物情報</h3>
+                <dl className="detail-list">
                   {property.building_age !== undefined && (
                     <>
                       <dt>築年数</dt>
                       <dd>築{property.building_age}年</dd>
                     </>
                   )}
-                  {property.floor && (
+                  {property.structure && (
+                    <>
+                      <dt>構造</dt>
+                      <dd>{property.structure}</dd>
+                    </>
+                  )}
+                  {property.floor_label && (
+                    <>
+                      <dt>階</dt>
+                      <dd>{decodeUnicodeEscapes(property.floor_label)}</dd>
+                    </>
+                  )}
+                  {property.floor && !property.floor_label && (
                     <>
                       <dt>階数</dt>
                       <dd>{property.floor}階</dd>
@@ -224,18 +418,116 @@ export default function PropertyDetailPage() {
               </div>
 
               <div className="detail-card">
-                <h3 className="detail-card-title">アクセス・所在地</h3>
+                <h3 className="detail-card-title">アクセス{stations.length > 0 && `（${stations.length}駅）`}</h3>
                 <dl className="detail-list">
-                  {property.station && property.walk_time && (
+                  {stations.length > 0 ? (
+                    <>
+                      <dt>最寄駅</dt>
+                      <dd>
+                        <div className="stations-list">
+                          {stations.map((station, index) => (
+                            <div key={station.id} className="station-item">
+                              {index === 0 && <span className="nearest-badge">最寄り</span>}
+                              <span className="station-name">{station.station_name}</span>
+                              <span className="station-line">{station.line_name}</span>
+                              {station.walk_minutes !== null && station.walk_minutes !== undefined ? (
+                                <span className="station-walk">徒歩{station.walk_minutes}分</span>
+                              ) : (
+                                <span className="station-walk">徒歩不明</span>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </dd>
+                    </>
+                  ) : property.station && property.walk_time ? (
                     <>
                       <dt>最寄駅</dt>
                       <dd>{property.station} 徒歩{property.walk_time}分</dd>
                     </>
-                  )}
+                  ) : null}
                   {property.address && (
                     <>
                       <dt>所在地</dt>
                       <dd>{property.address}</dd>
+                    </>
+                  )}
+                </dl>
+              </div>
+
+              <div className="detail-card">
+                <h3 className="detail-card-title">費用詳細</h3>
+                <dl className="detail-list">
+                  {property.rent && (
+                    <>
+                      <dt>賃料</dt>
+                      <dd className="highlight-value">{formatRent(property.rent)}万円</dd>
+                    </>
+                  )}
+                  {property.management_fee && (
+                    <>
+                      <dt>管理費・共益費</dt>
+                      <dd>{property.management_fee}</dd>
+                    </>
+                  )}
+                  {property.deposit && (
+                    <>
+                      <dt>敷金</dt>
+                      <dd>{property.deposit}</dd>
+                    </>
+                  )}
+                  {property.key_money && (
+                    <>
+                      <dt>礼金</dt>
+                      <dd>{property.key_money}</dd>
+                    </>
+                  )}
+                  {property.guarantor_deposit && (
+                    <>
+                      <dt>保証金</dt>
+                      <dd>{property.guarantor_deposit}</dd>
+                    </>
+                  )}
+                  {property.security_deposit && (
+                    <>
+                      <dt>敷引</dt>
+                      <dd>{property.security_deposit}</dd>
+                    </>
+                  )}
+                </dl>
+              </div>
+
+              <div className="detail-card">
+                <h3 className="detail-card-title">契約情報</h3>
+                <dl className="detail-list">
+                  {property.move_in_date && (
+                    <>
+                      <dt>入居可能日</dt>
+                      <dd>{property.move_in_date}</dd>
+                    </>
+                  )}
+                  {property.contract_period && (
+                    <>
+                      <dt>契約期間</dt>
+                      <dd>{property.contract_period}</dd>
+                    </>
+                  )}
+                  {property.insurance && (
+                    <>
+                      <dt>保険</dt>
+                      <dd>{property.insurance}</dd>
+                    </>
+                  )}
+                  {property.parking && (
+                    <>
+                      <dt>駐車場</dt>
+                      <dd>{property.parking}</dd>
+                    </>
+                  )}
+                  {property.conditions && (
+                    <>
+                      <dt>入居条件</dt>
+                      <dd>{property.conditions}</dd>
                     </>
                   )}
                 </dl>
@@ -253,6 +545,52 @@ export default function PropertyDetailPage() {
                 </dl>
               </div>
             </div>
+
+            {(property.facilities || property.features) && (
+              <div className="detail-card-full">
+                <h3 className="detail-card-title">設備・特徴</h3>
+                <div className="facilities-grid">
+                  {property.facilities && (
+                    <div className="facility-section">
+                      <h4 className="facility-section-title">設備</h4>
+                      <div className="facility-tags">
+                        {parseFacilitiesString(property.facilities).map((facility, index) => (
+                          <span key={index} className="facility-tag">{translateFacility(facility)}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {property.features && (
+                    <div className="facility-section">
+                      <h4 className="facility-section-title">特徴</h4>
+                      <div className="facility-tags">
+                        {parseFacilitiesString(property.features).map((feature, index) => (
+                          <span key={index} className="facility-tag feature">{translateFacility(feature)}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {property.room_layout_image_url && (
+              <div className="detail-card-full">
+                <h3 className="detail-card-title">間取り図</h3>
+                <div className="layout-image-wrapper">
+                  <img src={property.room_layout_image_url} alt="間取り図" />
+                </div>
+              </div>
+            )}
+
+            {property.notes && (
+              <div className="detail-card-full">
+                <h3 className="detail-card-title">備考</h3>
+                <div className="notes-content">
+                  {property.notes}
+                </div>
+              </div>
+            )}
 
             <div className="detail-actions">
               <a
@@ -375,66 +713,86 @@ export default function PropertyDetailPage() {
           position: sticky;
           top: 0;
           z-index: 100;
+          box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+          overflow: hidden;
         }
 
-        .header-inner {
+        .header-top {
           max-width: 1200px;
           margin: 0 auto;
-          padding: 16px 20px;
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 20px;
+          padding: 12px 20px;
+          border-bottom: 1px solid var(--border-color);
+          overflow: hidden;
         }
 
         .back-button {
-          display: flex;
+          display: inline-flex;
           align-items: center;
-          gap: 8px;
-          padding: 8px 16px;
-          background: var(--bg-secondary);
+          gap: 6px;
+          padding: 8px 14px;
+          background: transparent;
+          border: 1px solid var(--border-color);
           border-radius: 8px;
           color: var(--text-primary);
           text-decoration: none;
           font-size: 14px;
           font-weight: 500;
-          transition: background-color 0.2s;
-        }
-
-        .back-button:hover {
-          background: var(--bg-tertiary);
-        }
-
-        .back-button svg {
-          width: 16px;
-          height: 16px;
-        }
-
-        .tab-nav {
-          display: flex;
-          gap: 8px;
-        }
-
-        .tab-btn {
-          padding: 10px 20px;
-          background: none;
-          border: none;
-          border-radius: 8px;
-          font-size: 14px;
-          font-weight: 500;
-          color: var(--text-muted);
-          cursor: pointer;
           transition: all 0.2s;
         }
 
-        .tab-btn:hover {
+        .back-button:hover {
           background: var(--bg-secondary);
+          border-color: var(--text-muted);
+        }
+
+        .back-button svg {
+          flex-shrink: 0;
+        }
+
+        .tab-nav {
+          max-width: 1200px;
+          margin: 0 auto;
+          padding: 0 20px;
+          display: flex;
+          gap: 4px;
+        }
+
+        .tab-btn {
+          position: relative;
+          padding: 14px 24px;
+          background: none;
+          border: none;
+          font-size: 15px;
+          font-weight: 600;
+          color: var(--text-muted);
+          cursor: pointer;
+          transition: all 0.2s;
+          border-bottom: 3px solid transparent;
+        }
+
+        .tab-btn:hover {
           color: var(--text-primary);
         }
 
         .tab-btn.active {
+          color: var(--primary);
+          border-bottom-color: var(--primary);
+        }
+
+        .tab-count {
+          display: inline-block;
+          margin-left: 6px;
+          padding: 2px 8px;
           background: var(--primary);
           color: white;
+          border-radius: 12px;
+          font-size: 12px;
+          font-weight: 600;
+        }
+
+        .tab-btn:not(.active) .tab-count {
+          background: var(--bg-tertiary);
+          color: var(--text-muted);
         }
 
         .detail-content {
@@ -521,6 +879,126 @@ export default function PropertyDetailPage() {
           font-size: 14px;
           color: var(--text-primary);
           margin: 0;
+        }
+
+        .detail-list dd.highlight-value {
+          color: var(--primary);
+          font-weight: 600;
+          font-size: 16px;
+        }
+
+        .stations-list {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+        }
+
+        .station-item {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 8px;
+          background: var(--bg-secondary);
+          border-radius: 6px;
+        }
+
+        .station-name {
+          font-weight: 600;
+          color: var(--text-primary);
+        }
+
+        .station-line {
+          font-size: 13px;
+          color: var(--text-muted);
+          flex: 1;
+        }
+
+        .station-walk {
+          font-size: 13px;
+          color: var(--primary);
+          font-weight: 500;
+        }
+
+        .nearest-badge {
+          display: inline-block;
+          padding: 2px 8px;
+          background: var(--primary);
+          color: white;
+          border-radius: 4px;
+          font-size: 11px;
+          font-weight: 600;
+        }
+
+        .detail-card-full {
+          background: white;
+          border-radius: 12px;
+          padding: 24px;
+          margin-bottom: 20px;
+          grid-column: 1 / -1;
+        }
+
+        .facilities-grid {
+          display: flex;
+          flex-direction: column;
+          gap: 20px;
+        }
+
+        .facility-section {
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+        }
+
+        .facility-section-title {
+          font-size: 14px;
+          font-weight: 600;
+          color: var(--text-primary);
+          margin: 0;
+        }
+
+        .facility-tags {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+        }
+
+        .facility-tag {
+          padding: 6px 12px;
+          background: var(--bg-secondary);
+          color: var(--text-primary);
+          border-radius: 6px;
+          font-size: 13px;
+          border: 1px solid var(--border-color);
+        }
+
+        .facility-tag.feature {
+          background: var(--bg-tertiary);
+          border-color: var(--primary);
+          color: var(--primary);
+        }
+
+        .layout-image-wrapper {
+          width: 100%;
+          max-width: 600px;
+          margin: 0 auto;
+        }
+
+        .layout-image-wrapper img {
+          width: 100%;
+          height: auto;
+          border-radius: 8px;
+          border: 1px solid var(--border-color);
+        }
+
+        .notes-content {
+          font-size: 14px;
+          line-height: 1.8;
+          color: var(--text-primary);
+          white-space: pre-wrap;
+          padding: 16px;
+          background: var(--bg-secondary);
+          border-radius: 8px;
+          border-left: 4px solid var(--primary);
         }
 
         .detail-actions {

@@ -5,8 +5,8 @@ import (
 	"log"
 	"real-estate-portal/internal/config"
 	"real-estate-portal/internal/models"
-	"real-estate-portal/internal/scraper"
 	"real-estate-portal/internal/snapshot"
+	"time"
 
 	"github.com/robfig/cron/v3"
 	"gorm.io/gorm"
@@ -72,6 +72,7 @@ func (s *Scheduler) Stop() {
 }
 
 // runDailyScraping executes the daily scraping routine
+// NOTE: This ONLY enqueues URLs for processing. Actual scraping happens via queue workers.
 func (s *Scheduler) runDailyScraping() error {
 	// Get all active properties to re-scrape
 	var properties []models.Property
@@ -79,70 +80,79 @@ func (s *Scheduler) runDailyScraping() error {
 		return err
 	}
 
-	log.Printf("Scheduler: Found %d active properties to update", len(properties))
+	log.Printf("Scheduler: Found %d active properties to enqueue for update", len(properties))
 
-	// Create scraper with configuration
-	sc := scraper.NewScraperWithConfig(scraper.ScraperConfig{
-		Timeout:      s.config.Scraper.GetTimeout(),
-		MaxRetries:   s.config.Scraper.MaxRetries,
-		RetryDelay:   s.config.Scraper.GetRetryDelay(),
-		RequestDelay: s.config.Scraper.GetRequestDelay(),
-	})
-
-	successCount := 0
-	errorCount := 0
-	changedCount := 0
-
-	// Re-scrape each property
-	for i, prop := range properties {
-		log.Printf("Scheduler: [%d/%d] Updating property %s", i+1, len(properties), prop.ID)
-
-		// Scrape the property page
-		updatedProp, err := sc.ScrapeProperty(prop.DetailURL)
-		if err != nil {
-			log.Printf("Scheduler: Failed to scrape property %s: %v", prop.ID, err)
-			errorCount++
-
-			// If property is no longer accessible, mark as removed
-			if s.config.Scraper.StopOnError {
-				log.Println("Scheduler: Stop on error is enabled, stopping daily scraping")
-				break
-			}
-			continue
-		}
-
-		// Preserve original ID and created_at
-		updatedProp.ID = prop.ID
-		updatedProp.CreatedAt = prop.CreatedAt
-
-		// Detect changes before updating
-		changes, err := s.snapshot.DetectChanges(updatedProp)
-		if err != nil {
-			log.Printf("Scheduler: Failed to detect changes for property %s: %v", prop.ID, err)
-		}
-
-		if len(changes) > 0 {
-			changedCount++
-			log.Printf("Scheduler: Property %s has %d changes", prop.ID, len(changes))
-		}
-
-		// Update property in database
-		if err := s.db.Save(updatedProp).Error; err != nil {
-			log.Printf("Scheduler: Failed to save property %s: %v", prop.ID, err)
-			errorCount++
-			continue
-		}
-
-		// Create snapshot with change detection
-		if err := s.snapshot.CreateSnapshotWithChangeDetection(updatedProp); err != nil {
-			log.Printf("Scheduler: Failed to create snapshot for property %s: %v", prop.ID, err)
-		}
-
-		successCount++
+	// Limit: Don't overwhelm the queue (max 100 per scheduler run)
+	maxEnqueue := 100
+	if len(properties) > maxEnqueue {
+		log.Printf("Scheduler: Limiting to %d properties (total: %d)", maxEnqueue, len(properties))
+		properties = properties[:maxEnqueue]
 	}
 
-	log.Printf("Scheduler: Daily scraping completed. Success: %d, Errors: %d, Changed: %d",
-		successCount, errorCount, changedCount)
+	enqueuedCount := 0
+	skippedExisting := 0
+	skippedDone := 0
+	errorCount := 0
+
+	// Enqueue each property URL (no direct scraping!)
+	for i, prop := range properties {
+		// Extract source_property_id from the property
+		// For Yahoo: it's stored in SourcePropertyID field
+		if prop.Source == "" || prop.SourcePropertyID == "" || prop.DetailURL == "" {
+			log.Printf("Scheduler: [%d/%d] Skipping property %s (missing source/URL)", i+1, len(properties), prop.ID)
+			errorCount++
+			continue
+		}
+
+		// Check if already in queue with pending/processing status
+		var existingQueue models.DetailScrapeQueue
+		result := s.db.Where("source = ? AND source_property_id = ? AND status IN ?",
+			prop.Source, prop.SourcePropertyID, []string{models.QueueStatusPending, models.QueueStatusProcessing}).
+			First(&existingQueue)
+
+		if result.Error == nil {
+			// Already in queue, skip
+			skippedExisting++
+			continue
+		}
+
+		// Check if recently completed (within 12 hours) to avoid re-scraping too soon
+		var recentDone models.DetailScrapeQueue
+		twelveHoursAgo := time.Now().Add(-12 * time.Hour)
+		resultDone := s.db.Where("source = ? AND source_property_id = ? AND status = ? AND updated_at > ?",
+			prop.Source, prop.SourcePropertyID, models.QueueStatusDone, twelveHoursAgo).
+			First(&recentDone)
+
+		if resultDone.Error == nil {
+			// Recently completed, skip
+			skippedDone++
+			continue
+		}
+
+		// Enqueue for processing
+		queue := models.DetailScrapeQueue{
+			Source:           prop.Source,
+			SourcePropertyID: prop.SourcePropertyID,
+			DetailURL:        prop.DetailURL,
+			Status:           models.QueueStatusPending,
+			Priority:         1, // Scheduled updates have priority 1 (manual can be higher)
+		}
+
+		if err := s.db.Create(&queue).Error; err != nil {
+			log.Printf("Scheduler: [%d/%d] Failed to enqueue property %s: %v", i+1, len(properties), prop.ID, err)
+			errorCount++
+			continue
+		}
+
+		enqueuedCount++
+
+		if (i+1)%50 == 0 {
+			log.Printf("Scheduler: Progress: %d/%d processed", i+1, len(properties))
+		}
+	}
+
+	log.Printf("Scheduler: Daily enqueue completed. Enqueued=%d, SkippedExisting=%d, SkippedDone=%d, Errors=%d",
+		enqueuedCount, skippedExisting, skippedDone, errorCount)
 
 	return nil
 }

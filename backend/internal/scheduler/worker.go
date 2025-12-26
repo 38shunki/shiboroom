@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"real-estate-portal/internal/database"
 	"real-estate-portal/internal/models"
 	"real-estate-portal/internal/scraper"
 	"real-estate-portal/internal/snapshot"

@@ -72,16 +72,16 @@ if [ "$DEPLOY_BACKEND" = true ]; then
   echo "🚀 Deploying on server..."
   ssh "$SERVER" << 'ENDSSH'
     # Backup
-    if [ -f /var/www/shiboroom/shiboroom-api ]; then
+    if [ -f /var/www/shiboroom/backend/shiboroom-api ]; then
       echo "💾 Backing up current binary..."
-      sudo cp /var/www/shiboroom/shiboroom-api /var/www/shiboroom/shiboroom-api.backup
+      sudo cp /var/www/shiboroom/backend/shiboroom-api /var/www/shiboroom/backend/shiboroom-api.backup
     fi
 
     # Install
     echo "📂 Installing new binary..."
-    sudo mv /tmp/shiboroom-api /var/www/shiboroom/
-    sudo chown grik:grik /var/www/shiboroom/shiboroom-api
-    sudo chmod +x /var/www/shiboroom/shiboroom-api
+    sudo mv /tmp/shiboroom-api /var/www/shiboroom/backend/
+    sudo chown grik:grik /var/www/shiboroom/backend/shiboroom-api
+    sudo chmod +x /var/www/shiboroom/backend/shiboroom-api
 
     # Restart
     echo "🔄 Restarting backend service..."
@@ -149,7 +149,7 @@ if [ "$DEPLOY_FRONTEND" = true ]; then
 
     # Build with production environment
     echo "🏗️  Building with production environment..."
-    NODE_ENV=production npm run build
+    NEXT_PUBLIC_API_URL=https://shiboroom.com NODE_ENV=production npm run build
 
     # Verify App Router was used (not Pages Router)
     if [ -d ".next/server/app" ]; then

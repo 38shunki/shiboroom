@@ -76,6 +76,7 @@ func (gdb *GormDB) InitSchema() error {
 		&models.PropertyChange{},
 		&models.DeleteLog{},
 		&models.DetailScrapeQueue{},
+		&models.PropertyStation{},
 	)
 }
 
@@ -124,14 +125,65 @@ func (gdb *GormDB) GetAllProperties() ([]models.Property, error) {
 	return properties, err
 }
 
+// PropertyFilters holds filter parameters for property search
+type PropertyFilters struct {
+	Station  string // Partial match on station_name
+	Line     string // Partial match on line_name
+	MaxWalk  int    // Maximum walk time in minutes (0 = no filter)
+	WalkMode string // "nearest" (use properties.walk_time) or "any" (use property_stations)
+	SortBy   string // Sort parameter
+	Limit    int    // Number of records to return (default: 50, max: 200)
+	Offset   int    // Number of records to skip (default: 0)
+}
+
+// PaginatedPropertiesResponse holds paginated property results
+type PaginatedPropertiesResponse struct {
+	Properties []models.Property `json:"properties"`
+	Total      int64             `json:"total"`
+	Limit      int               `json:"limit"`
+	Offset     int               `json:"offset"`
+}
+
 // GetPropertiesWithSort retrieves all properties with custom sorting
 func (gdb *GormDB) GetPropertiesWithSort(sortBy string) ([]models.Property, error) {
+	return gdb.GetPropertiesWithFilters(PropertyFilters{SortBy: sortBy})
+}
+
+// GetPropertiesWithFilters retrieves properties with filtering and sorting
+func (gdb *GormDB) GetPropertiesWithFilters(filters PropertyFilters) ([]models.Property, error) {
 	var properties []models.Property
+
+	// Start building query
+	query := gdb.db.Model(&models.Property{})
+
+	// Apply station filter (EXISTS on property_stations)
+	if filters.Station != "" {
+		query = query.Where("EXISTS (SELECT 1 FROM property_stations ps WHERE ps.property_id = properties.id AND ps.station_name LIKE ?)",
+			"%"+filters.Station+"%")
+	}
+
+	// Apply line filter (EXISTS on property_stations)
+	if filters.Line != "" {
+		query = query.Where("EXISTS (SELECT 1 FROM property_stations ps WHERE ps.property_id = properties.id AND ps.line_name LIKE ?)",
+			"%"+filters.Line+"%")
+	}
+
+	// Apply walk time filter
+	if filters.MaxWalk > 0 {
+		if filters.WalkMode == "any" {
+			// Any station within MaxWalk minutes
+			query = query.Where("EXISTS (SELECT 1 FROM property_stations ps WHERE ps.property_id = properties.id AND ps.walk_minutes IS NOT NULL AND ps.walk_minutes <= ?)",
+				filters.MaxWalk)
+		} else {
+			// Default: nearest station only (compatibility with legacy walk_time field)
+			query = query.Where("walk_time IS NOT NULL AND walk_time <= ?", filters.MaxWalk)
+		}
+	}
 
 	// Map sort parameter to SQL ORDER BY clause (MySQL syntax)
 	// Use CASE to put NULLs last for ASC, first for DESC
 	var orderClause string
-	switch sortBy {
+	switch filters.SortBy {
 	case "fetched_at", "fetched_at_desc":
 		orderClause = "fetched_at DESC"
 	case "fetched_at_asc":
@@ -151,8 +203,98 @@ func (gdb *GormDB) GetPropertiesWithSort(sortBy string) ([]models.Property, erro
 		orderClause = "fetched_at DESC"
 	}
 
-	err := gdb.db.Order(orderClause).Find(&properties).Error
+	err := query.Order(orderClause).Find(&properties).Error
 	return properties, err
+}
+
+// GetPropertiesWithFiltersPaginated retrieves properties with filtering, sorting, and pagination
+func (gdb *GormDB) GetPropertiesWithFiltersPaginated(filters PropertyFilters) (*PaginatedPropertiesResponse, error) {
+	// Set default limit if not specified
+	if filters.Limit <= 0 {
+		filters.Limit = 50
+	}
+	// Cap maximum limit at 200
+	if filters.Limit > 200 {
+		filters.Limit = 200
+	}
+	// Ensure offset is non-negative
+	if filters.Offset < 0 {
+		filters.Offset = 0
+	}
+
+	// Start building query
+	query := gdb.db.Model(&models.Property{})
+
+	// Apply station filter (EXISTS on property_stations)
+	if filters.Station != "" {
+		query = query.Where("EXISTS (SELECT 1 FROM property_stations ps WHERE ps.property_id = properties.id AND ps.station_name LIKE ?)",
+			"%"+filters.Station+"%")
+	}
+
+	// Apply line filter (EXISTS on property_stations)
+	if filters.Line != "" {
+		query = query.Where("EXISTS (SELECT 1 FROM property_stations ps WHERE ps.property_id = properties.id AND ps.line_name LIKE ?)",
+			"%"+filters.Line+"%")
+	}
+
+	// Apply walk time filter
+	if filters.MaxWalk > 0 {
+		if filters.WalkMode == "any" {
+			// Any station within MaxWalk minutes
+			query = query.Where("EXISTS (SELECT 1 FROM property_stations ps WHERE ps.property_id = properties.id AND ps.walk_minutes IS NOT NULL AND ps.walk_minutes <= ?)",
+				filters.MaxWalk)
+		} else {
+			// Default: nearest station only (compatibility with legacy walk_time field)
+			query = query.Where("walk_time IS NOT NULL AND walk_time <= ?", filters.MaxWalk)
+		}
+	}
+
+	// Get total count BEFORE pagination
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, err
+	}
+
+	// Map sort parameter to SQL ORDER BY clause (MySQL syntax)
+	// Use CASE to put NULLs last for ASC, first for DESC
+	var orderClause string
+	switch filters.SortBy {
+	case "fetched_at", "fetched_at_desc":
+		orderClause = "fetched_at DESC"
+	case "fetched_at_asc":
+		orderClause = "fetched_at ASC"
+	case "rent_asc":
+		orderClause = "CASE WHEN rent IS NULL THEN 1 ELSE 0 END, rent ASC"
+	case "rent_desc":
+		orderClause = "CASE WHEN rent IS NULL THEN 1 ELSE 0 END, rent DESC"
+	case "area_desc":
+		orderClause = "CASE WHEN area IS NULL THEN 1 ELSE 0 END, area DESC"
+	case "walk_time_asc":
+		orderClause = "CASE WHEN walk_time IS NULL THEN 1 ELSE 0 END, walk_time ASC"
+	case "building_age_asc":
+		orderClause = "CASE WHEN building_age IS NULL THEN 1 ELSE 0 END, building_age ASC"
+	default:
+		// Default to newest first (by fetched_at)
+		orderClause = "fetched_at DESC"
+	}
+
+	// Apply pagination and fetch results
+	var properties []models.Property
+	err := query.Order(orderClause).
+		Limit(filters.Limit).
+		Offset(filters.Offset).
+		Find(&properties).Error
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &PaginatedPropertiesResponse{
+		Properties: properties,
+		Total:      total,
+		Limit:      filters.Limit,
+		Offset:     filters.Offset,
+	}, nil
 }
 
 // GetPropertyByID retrieves a property by ID
@@ -163,6 +305,13 @@ func (gdb *GormDB) GetPropertyByID(id string) (*models.Property, error) {
 		return nil, err
 	}
 	return &property, nil
+}
+
+// GetPropertyStations retrieves all stations for a property
+func (gdb *GormDB) GetPropertyStations(propertyID string) ([]models.PropertyStation, error) {
+	var stations []models.PropertyStation
+	err := gdb.db.Where("property_id = ?", propertyID).Order("sort_order ASC").Find(&stations).Error
+	return stations, err
 }
 
 // savePropertyStations saves property stations within a transaction

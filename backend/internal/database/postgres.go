@@ -129,6 +129,61 @@ func (db *DB) GetAllProperties() ([]models.Property, error) {
 	return properties, nil
 }
 
+// GetPropertiesWithSort retrieves all properties with custom sorting
+func (db *DB) GetPropertiesWithSort(sortBy string) ([]models.Property, error) {
+	// Map sort parameter to SQL ORDER BY clause
+	var orderClause string
+	switch sortBy {
+	case "fetched_at", "fetched_at_desc":
+		orderClause = "fetched_at DESC"
+	case "fetched_at_asc":
+		orderClause = "fetched_at ASC"
+	case "rent_asc":
+		orderClause = "rent ASC NULLS LAST"
+	case "rent_desc":
+		orderClause = "rent DESC NULLS LAST"
+	case "area_desc":
+		orderClause = "area DESC NULLS LAST"
+	case "walk_time_asc":
+		orderClause = "walk_time ASC NULLS LAST"
+	case "building_age_asc":
+		orderClause = "building_age ASC NULLS LAST"
+	default:
+		// Default to newest first (by fetched_at)
+		orderClause = "fetched_at DESC"
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, detail_url, title, image_url,
+			   rent, floor_plan, area, walk_time, station, address, building_age, floor,
+			   fetched_at, created_at
+		FROM properties
+		ORDER BY %s
+	`, orderClause)
+
+	rows, err := db.conn.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var properties []models.Property
+	for rows.Next() {
+		var p models.Property
+		err := rows.Scan(
+			&p.ID, &p.DetailURL, &p.Title, &p.ImageURL,
+			&p.Rent, &p.FloorPlan, &p.Area, &p.WalkTime, &p.Station, &p.Address, &p.BuildingAge, &p.Floor,
+			&p.FetchedAt, &p.CreatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		properties = append(properties, p)
+	}
+
+	return properties, nil
+}
+
 // GetPropertyByID retrieves a property by ID
 func (db *DB) GetPropertyByID(id string) (*models.Property, error) {
 	query := `

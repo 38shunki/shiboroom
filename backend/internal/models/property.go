@@ -12,14 +12,36 @@ type Property struct {
 	ImageURL         string `gorm:"type:text" json:"image_url,omitempty"`
 
 	// フィルタ用属性
-	Rent        *int     `gorm:"type:int;index" json:"rent,omitempty"`
-	FloorPlan   string   `gorm:"type:varchar(20);index" json:"floor_plan,omitempty"`
-	Area        *float64 `gorm:"type:decimal(10,2)" json:"area,omitempty"`
-	WalkTime    *int     `gorm:"type:int;index" json:"walk_time,omitempty"`
-	Station     string   `gorm:"type:text" json:"station,omitempty"`
-	Address     string   `gorm:"type:text" json:"address,omitempty"`
-	BuildingAge *int     `gorm:"type:int" json:"building_age,omitempty"`
-	Floor       *int     `gorm:"type:int" json:"floor,omitempty"`
+	Rent              *int     `gorm:"type:int;index" json:"rent,omitempty"`
+	FloorPlan         string   `gorm:"type:varchar(20);index" json:"floor_plan,omitempty"`
+	Area              *float64 `gorm:"type:decimal(10,2)" json:"area,omitempty"`
+	WalkTime          *int     `gorm:"type:int;index" json:"walk_time,omitempty"`
+	Station           string   `gorm:"type:text" json:"station,omitempty"`
+	Address           string   `gorm:"type:text" json:"address,omitempty"`
+	BuildingAge       *int     `gorm:"type:int" json:"building_age,omitempty"`
+	Floor             *int     `gorm:"type:int" json:"floor,omitempty"`
+	BuildingType      string   `gorm:"type:varchar(50);index" json:"building_type"`                // マンション/アパート/一戸建て
+	Structure         string   `gorm:"type:varchar(50)" json:"structure"`                          // 鉄筋コンクリート/軽量鉄骨等
+	Facilities        string   `gorm:"type:text" json:"facilities"`                                // こだわり条件(JSON配列形式)
+	Features          string   `gorm:"type:text" json:"features"`                                  // ピックアウト特徴(JSON配列形式)
+	BuildingName      string   `gorm:"type:varchar(255)" json:"building_name,omitempty"`           // 建物名
+	Direction         string   `gorm:"type:varchar(50)" json:"direction,omitempty"`                // 方位
+	FloorPlanDetails  string   `gorm:"type:text" json:"floor_plan_details"`                        // 間取り内訳
+	FloorLabel        string   `gorm:"type:varchar(100)" json:"floor_label"`             // 階数情報（例: 地上3階建て/2階部分）
+	Parking           string   `gorm:"type:varchar(255)" json:"parking"`                           // 駐車場
+	ContractPeriod    string   `gorm:"type:varchar(50)" json:"contract_period"`                    // 契約期間
+	Insurance         string   `gorm:"type:varchar(255)" json:"insurance"`                         // 保険
+	RoomLayoutImageURL string  `gorm:"type:text" json:"room_layout_image_url,omitempty"`          // 間取り図URL
+
+	// 契約・費用情報
+	ManagementFee     string `gorm:"type:varchar(100)" json:"management_fee,omitempty"`      // 管理費・共益費
+	Deposit           string `gorm:"type:varchar(100)" json:"deposit,omitempty"`             // 敷金
+	KeyMoney          string `gorm:"type:varchar(100)" json:"key_money,omitempty"`           // 礼金
+	GuarantorDeposit  string `gorm:"type:varchar(100)" json:"guarantor_deposit,omitempty"`   // 保証金
+	SecurityDeposit   string `gorm:"type:varchar(100)" json:"security_deposit,omitempty"`    // 敷引
+	MoveInDate        string `gorm:"type:varchar(100)" json:"move_in_date,omitempty"`        // 入居可能時期
+	Conditions        string `gorm:"type:varchar(255)" json:"conditions,omitempty"`          // 条件等
+	Notes             string `gorm:"type:text" json:"notes,omitempty"`                       // 備考（初期費用詳細など）
 
 	// ステータス管理（論理削除）
 	Status     PropertyStatus `gorm:"type:varchar(20);not null;default:'active';index" json:"status"`

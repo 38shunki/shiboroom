@@ -18,6 +18,9 @@ interface Property {
   address?: string
   building_age?: number
   floor?: number
+  building_type?: string
+  facilities?: string
+  features?: string
   status: string
   fetched_at: string
   created_at: string
@@ -26,7 +29,7 @@ interface Property {
 
 type ViewMode = 'search' | 'results' | 'compare'
 type PropertyStatus = 'none' | 'candidate' | 'maybe' | 'excluded'
-type SortOption = 'newest' | 'rent_asc' | 'rent_desc' | 'area_desc' | 'walk_time_asc' | 'building_age_asc'
+type SortOption = 'newest' | 'oldest' | 'rent_asc' | 'rent_desc' | 'area_desc' | 'walk_time_asc' | 'building_age_asc'
 type DisplayMode = 'grid' | 'list' | 'map'
 
 export default function Home() {
@@ -54,6 +57,11 @@ export default function Home() {
   const [propertyStatuses, setPropertyStatuses] = useState<Record<string, PropertyStatus>>({})
   const [hiddenProperties, setHiddenProperties] = useState<Set<string>>(new Set())
   const [propertyMemos, setPropertyMemos] = useState<Record<string, string>>({})
+
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1)
+  const [totalProperties, setTotalProperties] = useState(0)
+  const propertiesPerPage = 50
 
   // Load property statuses from localStorage on mount
   useEffect(() => {
@@ -108,13 +116,16 @@ export default function Home() {
 
   // Search & Filter states (initialized from URL params)
   const [searchQuery, setSearchQuery] = useState(searchParams.get('q') || '')
-  const [minRent, setMinRent] = useState<number>(getNumberParam('minRent', 3))
-  const [maxRent, setMaxRent] = useState<number>(getNumberParam('maxRent', 50))
+  const [stationFilter, setStationFilter] = useState(searchParams.get('station') || '')
+  const [lineFilter, setLineFilter] = useState(searchParams.get('line') || '')
+  const [walkMode, setWalkMode] = useState(searchParams.get('walk_mode') || 'nearest')
+  const [minRent, setMinRent] = useState<number>(getNumberParam('minRent', 0))
+  const [maxRent, setMaxRent] = useState<number>(getNumberParam('maxRent', 100))
   const [selectedFloorPlans, setSelectedFloorPlans] = useState<string[]>(getArrayParam('floorPlans'))
-  const [minWalkTime, setMinWalkTime] = useState<number>(getNumberParam('minWalkTime', 1))
-  const [maxWalkTime, setMaxWalkTime] = useState<number>(getNumberParam('maxWalkTime', 30))
-  const [minArea, setMinArea] = useState<number>(getNumberParam('minArea', 15))
-  const [maxArea, setMaxArea] = useState<number>(getNumberParam('maxArea', 100))
+  const [minWalkTime, setMinWalkTime] = useState<number>(getNumberParam('minWalkTime', 0))
+  const [maxWalkTime, setMaxWalkTime] = useState<number>(getNumberParam('maxWalkTime', 60))
+  const [minArea, setMinArea] = useState<number>(getNumberParam('minArea', 0))
+  const [maxArea, setMaxArea] = useState<number>(getNumberParam('maxArea', 200))
   const [minBuildingAge, setMinBuildingAge] = useState<number>(getNumberParam('minBuildingAge', 0))
   const [maxBuildingAge, setMaxBuildingAge] = useState<number>(getNumberParam('maxBuildingAge', 50))
   const [minFloor, setMinFloor] = useState<number>(getNumberParam('minFloor', 1))
@@ -135,6 +146,9 @@ export default function Home() {
     (searchParams.get('display') as DisplayMode) || 'grid'
   )
 
+  // Mobile filter modal state
+  const [mobileFilterOpen, setMobileFilterOpen] = useState(false)
+
   // Update URL when filters change
   useEffect(() => {
     const params = new URLSearchParams()
@@ -148,13 +162,13 @@ export default function Home() {
     if (searchQuery) params.set('q', searchQuery)
 
     // Add filters (only if different from defaults)
-    if (minRent !== 3) params.set('minRent', minRent.toString())
-    if (maxRent !== 50) params.set('maxRent', maxRent.toString())
+    if (minRent !== 0) params.set('minRent', minRent.toString())
+    if (maxRent !== 100) params.set('maxRent', maxRent.toString())
     if (selectedFloorPlans.length > 0) params.set('floorPlans', selectedFloorPlans.join(','))
-    if (minWalkTime !== 1) params.set('minWalkTime', minWalkTime.toString())
-    if (maxWalkTime !== 30) params.set('maxWalkTime', maxWalkTime.toString())
-    if (minArea !== 15) params.set('minArea', minArea.toString())
-    if (maxArea !== 100) params.set('maxArea', maxArea.toString())
+    if (minWalkTime !== 0) params.set('minWalkTime', minWalkTime.toString())
+    if (maxWalkTime !== 60) params.set('maxWalkTime', maxWalkTime.toString())
+    if (minArea !== 0) params.set('minArea', minArea.toString())
+    if (maxArea !== 200) params.set('maxArea', maxArea.toString())
     if (minBuildingAge !== 0) params.set('minBuildingAge', minBuildingAge.toString())
     if (maxBuildingAge !== 50) params.set('maxBuildingAge', maxBuildingAge.toString())
     if (minFloor !== 1) params.set('minFloor', minFloor.toString())
@@ -219,18 +233,44 @@ export default function Home() {
     }
   }, [sortBy])
 
-  const fetchProperties = async (query = '', filters: any = {}) => {
+  const fetchProperties = async (query = '', filters: any = {}, page = currentPage) => {
     setLoading(true)
     try {
-      // Use simple properties endpoint (Meilisearch not available yet)
-      const response = await fetch(`${API_URL}/api/properties?limit=1000`)
+      // Build URL with pagination and sort parameters
+      const params = new URLSearchParams()
+      params.set('limit', propertiesPerPage.toString())
+      params.set('offset', ((page - 1) * propertiesPerPage).toString())
 
+      // Map sortBy to API sort parameter
+      const sortMapping: Record<SortOption, string> = {
+        newest: 'fetched_at_desc',
+        oldest: 'fetched_at_asc',
+        rent_asc: 'rent_asc',
+        rent_desc: 'rent_desc',
+        area_desc: 'area_desc',
+        walk_time_asc: 'walk_time_asc',
+        building_age_asc: 'building_age_asc'
+      }
+
+      const apiSort = sortMapping[sortBy] || 'fetched_at'
+      params.set('sort', apiSort)
+
+      const response = await fetch(`${API_URL}/api/properties?${params.toString()}`)
       const data = await response.json()
 
-      // API returns array directly, not wrapped in {properties: [...]}
-      const propertiesArray = Array.isArray(data) ? data : (data.properties || [])
-      console.log('✅ Fetched properties:', propertiesArray.length)
-      setProperties(propertiesArray)
+      // Handle both paginated and non-paginated responses
+      if (data.properties && data.total !== undefined) {
+        // Paginated response
+        setProperties(data.properties)
+        setTotalProperties(data.total)
+        console.log('✅ Fetched properties:', data.properties.length, 'of', data.total, 'total, page:', page, 'sorted by:', apiSort)
+      } else {
+        // Legacy non-paginated response (fallback)
+        const propertiesArray = Array.isArray(data) ? data : (data.properties || [])
+        setProperties(propertiesArray)
+        setTotalProperties(propertiesArray.length)
+        console.log('✅ Fetched properties (legacy):', propertiesArray.length, 'sorted by:', apiSort)
+      }
     } catch (error) {
       console.error('Error fetching properties:', error)
     } finally {
@@ -247,19 +287,26 @@ export default function Home() {
       maxWalkTime,
       floorPlans: selectedFloorPlans
     }
-    fetchProperties(searchQuery, filters)
+    setCurrentPage(1) // Reset to first page on new search
+    fetchProperties(searchQuery, filters, 1)
     setCurrentView('results')
+  }
+
+  const handlePageChange = (newPage: number) => {
+    setCurrentPage(newPage)
+    fetchProperties(searchQuery, {}, newPage)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   const handleResetFilters = () => {
     setSearchQuery('')
-    setMinRent(3)
-    setMaxRent(50)
+    setMinRent(0)
+    setMaxRent(100)
     setSelectedFloorPlans([])
-    setMinWalkTime(1)
-    setMaxWalkTime(30)
-    setMinArea(15)
-    setMaxArea(100)
+    setMinWalkTime(0)
+    setMaxWalkTime(60)
+    setMinArea(0)
+    setMaxArea(200)
     setMinBuildingAge(0)
     setMaxBuildingAge(50)
     setMinFloor(1)
@@ -267,6 +314,9 @@ export default function Home() {
     setSelectedBuildingTypes([])
     setSelectedFeatures([])
     setSelectedStatuses(['none', 'candidate', 'maybe'])
+    setSortBy('newest')
+    // Clear URL parameters
+    router.replace('/?view=results', { scroll: false })
     fetchProperties()
   }
 
@@ -391,6 +441,58 @@ export default function Home() {
       filtered = filtered.filter(p => p.floor_plan && selectedFloorPlans.includes(p.floor_plan))
     }
 
+    // Building type filter
+    if (selectedBuildingTypes.length > 0) {
+      filtered = filtered.filter(p => p.building_type && selectedBuildingTypes.includes(p.building_type))
+    }
+
+    // Features filter
+    if (selectedFeatures.length > 0) {
+      filtered = filtered.filter(p => {
+        // Special handling for floor-based filters - check floor field instead of facilities
+        const hasFirstFloor = selectedFeatures.includes('first_floor')
+        const hasSecondFloorPlus = selectedFeatures.includes('second_floor_plus')
+        const hasTopFloor = selectedFeatures.includes('top_floor')
+        const floorFilters = ['first_floor', 'second_floor_plus', 'top_floor']
+        const otherFeatures = selectedFeatures.filter(f => !floorFilters.includes(f))
+
+        // Check floor requirements
+        if (hasFirstFloor) {
+          if (!p.floor || p.floor !== 1) {
+            return false
+          }
+        }
+        if (hasSecondFloorPlus) {
+          if (!p.floor || p.floor < 2) {
+            return false
+          }
+        }
+        if (hasTopFloor) {
+          // TODO: Need building total floors data to determine if this is top floor
+          // For now, just check if floor exists
+          if (!p.floor) {
+            return false
+          }
+        }
+
+        // Check other facility requirements
+        if (otherFeatures.length > 0) {
+          if (!p.facilities) return false
+          try {
+            const facilities = JSON.parse(p.facilities)
+            if (!Array.isArray(facilities)) return false
+            if (!otherFeatures.every(feature => facilities.includes(feature))) {
+              return false
+            }
+          } catch {
+            return false
+          }
+        }
+
+        return true
+      })
+    }
+
     // Status filter
     if (selectedStatuses.length > 0) {
       filtered = filtered.filter(p => {
@@ -399,7 +501,7 @@ export default function Home() {
       })
     }
 
-    // Sorting is handled by Meilisearch on the server
+    // Sorting is handled by API on the server (fetched with sort parameter)
     return filtered
   }
 
@@ -632,10 +734,6 @@ export default function Home() {
                         <span className="lp-report-title">相違報告あり</span>
                       </div>
                       <div className="lp-report-item">
-                        <span>独立洗面台の表記が怪しい</span>
-                        <span className="lp-report-count">3件</span>
-                      </div>
-                      <div className="lp-report-item">
                         <span>写真と実際の印象が違う</span>
                         <span className="lp-report-count">2件</span>
                       </div>
@@ -726,8 +824,26 @@ export default function Home() {
       {/* Results View */}
       {currentView === 'results' && (
         <section className="results-view active">
+          {/* Mobile Filter Button */}
+          <button
+            className="mobile-filter-btn"
+            onClick={() => setMobileFilterOpen(true)}
+            aria-label="フィルタを開く"
+          >
+            ⚙️
+          </button>
+
           {/* Sidebar Filters */}
-          <aside className="sidebar">
+          <aside className={`sidebar ${mobileFilterOpen ? 'mobile-open' : ''}`}>
+            {/* Mobile Close Button */}
+            <button
+              className="mobile-filter-close"
+              onClick={() => setMobileFilterOpen(false)}
+              aria-label="フィルタを閉じる"
+            >
+              ✕
+            </button>
+
             <div className="sidebar-header">
               <span className="sidebar-title">条件で絞り込み</span>
               <button className="edit-search-btn" onClick={() => setCurrentView('search')}>検索条件を編集</button>
@@ -745,8 +861,8 @@ export default function Home() {
                     <input
                       type="range"
                       className="range-slider"
-                      min="3"
-                      max="50"
+                      min="0"
+                      max="100"
                       value={minRent}
                       onChange={(e) => {
                         const val = Number(e.target.value)
@@ -756,8 +872,8 @@ export default function Home() {
                     <input
                       type="range"
                       className="range-slider"
-                      min="3"
-                      max="50"
+                      min="0"
+                      max="100"
                       value={maxRent}
                       onChange={(e) => {
                         const val = Number(e.target.value)
@@ -776,8 +892,8 @@ export default function Home() {
                     <input
                       type="range"
                       className="range-slider"
-                      min="1"
-                      max="30"
+                      min="0"
+                      max="60"
                       value={minWalkTime}
                       onChange={(e) => {
                         const val = Number(e.target.value)
@@ -787,8 +903,8 @@ export default function Home() {
                     <input
                       type="range"
                       className="range-slider"
-                      min="1"
-                      max="30"
+                      min="0"
+                      max="60"
                       value={maxWalkTime}
                       onChange={(e) => {
                         const val = Number(e.target.value)
@@ -807,8 +923,8 @@ export default function Home() {
                     <input
                       type="range"
                       className="range-slider"
-                      min="15"
-                      max="100"
+                      min="0"
+                      max="200"
                       value={minArea}
                       onChange={(e) => {
                         const val = Number(e.target.value)
@@ -818,8 +934,8 @@ export default function Home() {
                     <input
                       type="range"
                       className="range-slider"
-                      min="15"
-                      max="100"
+                      min="0"
+                      max="200"
                       value={maxArea}
                       onChange={(e) => {
                         const val = Number(e.target.value)
@@ -910,34 +1026,238 @@ export default function Home() {
                 <div className="filter-group">
                   <label className="filter-label">建物種別</label>
                   <div className="checkbox-group">
-                    {['マンション', 'アパート', '一戸建て'].map(type => (
-                      <label key={type} className="checkbox-item">
+                    {[
+                      { key: 'mansion', label: 'マンション' },
+                      { key: 'apartment', label: 'アパート' },
+                      { key: 'house', label: '一戸建て' },
+                      { key: 'terrace_house', label: 'テラスハウス' },
+                      { key: 'town_house', label: 'タウンハウス' }
+                    ].map(({ key, label }) => (
+                      <label key={key} className="checkbox-item">
                         <input
                           type="checkbox"
-                          checked={selectedBuildingTypes.includes(type)}
-                          onChange={() => toggleBuildingType(type)}
+                          checked={selectedBuildingTypes.includes(key)}
+                          onChange={() => toggleBuildingType(key)}
                         />
-                        <span className="checkbox-label">{type}</span>
+                        <span className="checkbox-label">{label}</span>
                       </label>
                     ))}
                   </div>
                 </div>
 
+                {/* 人気のこだわり条件 */}
                 <div className="filter-group">
-                  <label className="filter-label">こだわり条件</label>
+                  <label className="filter-label">人気のこだわり条件</label>
                   <div className="checkbox-group">
-                    {['バストイレ別', 'オートロック', '宅配BOX', 'ペット可', '南向き', '角部屋', '2階以上', '駐車場あり'].map(feature => (
-                      <label key={feature} className="checkbox-item">
+                    {[
+                      { key: 'bath_toilet_separate', label: 'バストイレ別' },
+                      { key: 'second_floor_plus', label: '2階以上' },
+                      { key: 'indoor_washer', label: '洗濯機置き場' },
+                      { key: 'parking', label: '駐車場あり' },
+                      { key: 'ac', label: 'エアコン' },
+                      { key: 'flooring', label: 'フローリング' },
+                      { key: 'washbasin', label: '洗面台' },
+                      { key: 'pet_friendly', label: 'ペット相談' },
+                      { key: 'balcony', label: 'ベランダ' },
+                      { key: 'reheating_bath', label: '追い焚き機能' }
+                    ].map(({ key, label }) => (
+                      <label key={key} className="checkbox-item">
                         <input
                           type="checkbox"
-                          checked={selectedFeatures.includes(feature)}
-                          onChange={() => toggleFeature(feature)}
+                          checked={selectedFeatures.includes(key)}
+                          onChange={() => toggleFeature(key)}
                         />
-                        <span className="checkbox-label">{feature}</span>
+                        <span className="checkbox-label">{label}</span>
                       </label>
                     ))}
                   </div>
                 </div>
+
+                {/* バス・トイレ */}
+                <div className="filter-group">
+                  <label className="filter-label">バス・トイレ</label>
+                  <div className="checkbox-group">
+                    {[
+                      { key: 'bath_toilet_separate', label: 'バストイレ別' },
+                      { key: 'washbasin', label: '洗面台' },
+                      { key: 'reheating_bath', label: '追い焚き機能' },
+                      { key: 'bathroom_dryer', label: '浴室乾燥機' },
+                      { key: 'washlet', label: '温水洗浄便座' }
+                    ].map(({ key, label }) => (
+                      <label key={key} className="checkbox-item">
+                        <input
+                          type="checkbox"
+                          checked={selectedFeatures.includes(key)}
+                          onChange={() => toggleFeature(key)}
+                        />
+                        <span className="checkbox-label">{label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                {/* キッチン */}
+                <div className="filter-group">
+                  <label className="filter-label">キッチン</label>
+                  <div className="checkbox-group">
+                    {[
+                      { key: 'gas_stove', label: 'ガスコンロ可' },
+                      { key: 'system_kitchen', label: 'システムキッチン' },
+                      { key: 'counter_kitchen', label: 'カウンターキッチン' },
+                      { key: 'ih_stove', label: 'IHクッキングヒーター' },
+                      { key: 'city_gas', label: '都市ガス' }
+                    ].map(({ key, label }) => (
+                      <label key={key} className="checkbox-item">
+                        <input
+                          type="checkbox"
+                          checked={selectedFeatures.includes(key)}
+                          onChange={() => toggleFeature(key)}
+                        />
+                        <span className="checkbox-label">{label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 収納 */}
+                <div className="filter-group">
+                  <label className="filter-label">収納</label>
+                  <div className="checkbox-group">
+                    {[
+                      { key: 'closet', label: 'クローゼット' },
+                      { key: 'walk_in_closet', label: 'ウォークインクローゼット' },
+                      { key: 'storage', label: '物置' },
+                      { key: 'trunk_room', label: 'トランクルーム' }
+                    ].map(({ key, label }) => (
+                      <label key={key} className="checkbox-item">
+                        <input
+                          type="checkbox"
+                          checked={selectedFeatures.includes(key)}
+                          onChange={() => toggleFeature(key)}
+                        />
+                        <span className="checkbox-label">{label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                {/* セキュリティ */}
+                <div className="filter-group">
+                  <label className="filter-label">セキュリティ</label>
+                  <div className="checkbox-group">
+                    {[
+                      { key: 'auto_lock', label: 'オートロック' },
+                      { key: 'tv_intercom', label: 'モニター付きインターホン' },
+                      { key: 'security_camera', label: '防犯カメラ' },
+                      { key: 'card_key', label: 'カードキー' },
+                      { key: 'resident_manager', label: '管理人常駐' }
+                    ].map(({ key, label }) => (
+                      <label key={key} className="checkbox-item">
+                        <input
+                          type="checkbox"
+                          checked={selectedFeatures.includes(key)}
+                          onChange={() => toggleFeature(key)}
+                        />
+                        <span className="checkbox-label">{label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 設備 */}
+                <div className="filter-group">
+                  <label className="filter-label">設備</label>
+                  <div className="checkbox-group">
+                    {[
+                      { key: 'indoor_washer', label: '洗濯機置き場' },
+                      { key: 'ac', label: 'エアコン' },
+                      { key: 'flooring', label: 'フローリング' },
+                      { key: 'loft', label: 'ロフト' },
+                      { key: 'elevator', label: 'エレベーター' },
+                      { key: 'delivery_box', label: '宅配ボックス' },
+                      { key: 'divided_condo', label: '分譲タイプ' },
+                      { key: 'maisonette', label: 'メゾネット' },
+                      { key: 'barrier_free', label: 'バリアフリー' },
+                      { key: 'floor_heating', label: '床暖房' }
+                    ].map(({ key, label }) => (
+                      <label key={key} className="checkbox-item">
+                        <input
+                          type="checkbox"
+                          checked={selectedFeatures.includes(key)}
+                          onChange={() => toggleFeature(key)}
+                        />
+                        <span className="checkbox-label">{label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 位置 */}
+                <div className="filter-group">
+                  <label className="filter-label">位置</label>
+                  <div className="checkbox-group">
+                    {[
+                      { key: 'first_floor', label: '1階' },
+                      { key: 'second_floor_plus', label: '2階以上' },
+                      { key: 'top_floor', label: '最上階' },
+                      { key: 'corner_room', label: '角部屋' },
+                      { key: 'south_facing', label: '南向き' }
+                    ].map(({ key, label }) => (
+                      <label key={key} className="checkbox-item">
+                        <input
+                          type="checkbox"
+                          checked={selectedFeatures.includes(key)}
+                          onChange={() => toggleFeature(key)}
+                        />
+                        <span className="checkbox-label">{label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 駐車場・駐輪場 */}
+                <div className="filter-group">
+                  <label className="filter-label">駐車場・駐輪場</label>
+                  <div className="checkbox-group">
+                    {[
+                      { key: 'parking', label: '駐車場あり' },
+                      { key: 'garage', label: '車庫' },
+                      { key: 'bike_parking', label: '自転車置き場' }
+                    ].map(({ key, label }) => (
+                      <label key={key} className="checkbox-item">
+                        <input
+                          type="checkbox"
+                          checked={selectedFeatures.includes(key)}
+                          onChange={() => toggleFeature(key)}
+                        />
+                        <span className="checkbox-label">{label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 入居条件 */}
+                <div className="filter-group">
+                  <label className="filter-label">入居条件</label>
+                  <div className="checkbox-group">
+                    {[
+                      { key: 'pet_friendly', label: 'ペット相談' },
+                      { key: 'instrument_ok', label: '楽器相談' },
+                      { key: 'two_occupants', label: '二人入居可' },
+                      { key: 'immediate_available', label: '即入居可' }
+                    ].map(({ key, label }) => (
+                      <label key={key} className="checkbox-item">
+                        <input
+                          type="checkbox"
+                          checked={selectedFeatures.includes(key)}
+                          onChange={() => toggleFeature(key)}
+                        />
+                        <span className="checkbox-label">{label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
 
                 <div className="filter-group">
                   <label className="filter-label">ステータス</label>
@@ -982,6 +1302,7 @@ export default function Home() {
               <div className="toolbar-left">
                 <select value={sortBy} onChange={(e) => setSortBy(e.target.value as SortOption)} className="sort-select">
                   <option value="newest">新着順</option>
+                  <option value="oldest">古い順</option>
                   <option value="rent_asc">家賃が安い順</option>
                   <option value="walk_time_asc">駅から近い順</option>
                   <option value="building_age_asc">築年数が新しい順</option>
@@ -1054,6 +1375,69 @@ export default function Home() {
                 />
               ))}
             </div>
+
+            {/* Pagination Controls */}
+            {totalProperties > propertiesPerPage && (
+              <div className="pagination">
+                <div className="pagination-info">
+                  {totalProperties}件中 {((currentPage - 1) * propertiesPerPage) + 1}〜{Math.min(currentPage * propertiesPerPage, totalProperties)}件を表示
+                </div>
+                <div className="pagination-controls">
+                  <button
+                    className="pagination-btn"
+                    onClick={() => handlePageChange(currentPage - 1)}
+                    disabled={currentPage === 1}
+                  >
+                    前へ
+                  </button>
+
+                  {(() => {
+                    const totalPages = Math.ceil(totalProperties / propertiesPerPage)
+                    const pages = []
+
+                    // Always show first page
+                    if (totalPages >= 1) pages.push(1)
+
+                    // Show ellipsis if needed
+                    if (currentPage > 3) pages.push(-1) // -1 represents ellipsis
+
+                    // Show pages around current page
+                    for (let i = Math.max(2, currentPage - 1); i <= Math.min(totalPages - 1, currentPage + 1); i++) {
+                      pages.push(i)
+                    }
+
+                    // Show ellipsis if needed
+                    if (currentPage < totalPages - 2) pages.push(-2) // -2 represents ellipsis
+
+                    // Always show last page
+                    if (totalPages > 1) pages.push(totalPages)
+
+                    return pages.map((page, index) => {
+                      if (page < 0) {
+                        return <span key={`ellipsis-${index}`} className="pagination-ellipsis">...</span>
+                      }
+                      return (
+                        <button
+                          key={page}
+                          className={`pagination-btn ${page === currentPage ? 'active' : ''}`}
+                          onClick={() => handlePageChange(page)}
+                        >
+                          {page}
+                        </button>
+                      )
+                    })
+                  })()}
+
+                  <button
+                    className="pagination-btn"
+                    onClick={() => handlePageChange(currentPage + 1)}
+                    disabled={currentPage === Math.ceil(totalProperties / propertiesPerPage)}
+                  >
+                    次へ
+                  </button>
+                </div>
+              </div>
+            )}
           </main>
         </section>
       )}

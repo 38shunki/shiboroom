@@ -83,11 +83,12 @@ func NewDetailLimiter(maxPerHour int) *DetailLimiter {
 }
 
 // Acquire waits until it's safe to make a detail page request
-func (dl *DetailLimiter) Acquire() {
+func (dl *DetailLimiter) Acquire(caller string) {
 	dl.mutex.Lock()
 	defer dl.mutex.Unlock()
 
 	now := time.Now()
+	nowEpoch := now.Unix()
 	windowStart := now.Add(-dl.windowDuration)
 
 	// Remove old requests outside the window
@@ -103,17 +104,20 @@ func (dl *DetailLimiter) Acquire() {
 	for len(dl.requestTimes) >= dl.maxPerHour {
 		oldestRequest := dl.requestTimes[0]
 		waitUntil := oldestRequest.Add(dl.windowDuration)
+		nextEpoch := waitUntil.Unix()
 		waitDuration := time.Until(waitUntil)
+		waitSec := int(waitDuration.Seconds())
 
 		if waitDuration > 0 {
-			log.Printf("[DetailLimiter] Limit reached (%d/%d per hour). Waiting %v...",
-				len(dl.requestTimes), dl.maxPerHour, waitDuration)
+			log.Printf("[DetailLimiter] caller=%s limiter=detail now_epoch=%d next_epoch=%d wait_sec=%d reason=rate_limit count=%d/%d",
+				caller, nowEpoch, nextEpoch, waitSec, len(dl.requestTimes), dl.maxPerHour)
 			dl.mutex.Unlock()
 			time.Sleep(waitDuration + 1*time.Second)
 			dl.mutex.Lock()
 
 			// Re-check after waiting
 			now = time.Now()
+			nowEpoch = now.Unix()
 			windowStart = now.Add(-dl.windowDuration)
 			validRequests = make([]time.Time, 0)
 			for _, t := range dl.requestTimes {
@@ -129,8 +133,8 @@ func (dl *DetailLimiter) Acquire() {
 
 	// Record this request
 	dl.requestTimes = append(dl.requestTimes, now)
-	log.Printf("[DetailLimiter] Request allowed (%d/%d used in last hour)",
-		len(dl.requestTimes), dl.maxPerHour)
+	log.Printf("[DetailLimiter] caller=%s Request allowed (%d/%d used in last hour)",
+		caller, len(dl.requestTimes), dl.maxPerHour)
 }
 
 // GetUsage returns current usage count in the window
