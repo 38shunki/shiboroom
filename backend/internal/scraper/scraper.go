@@ -37,9 +37,9 @@ var (
 	)
 
 	// DetailLimiter is exported for use in API handlers (single detail page scraping)
-	// Strictly limits detail pages to 5 per hour to avoid WAF detection
+	// Strictly limits detail pages to 8 per hour to avoid WAF detection
 	// NOTE: This should ONLY be used for single /api/scrape requests, NOT for batch/list operations
-	DetailLimiter = ratelimit.NewDetailLimiter(5) // 5 detail pages per hour max
+	DetailLimiter = ratelimit.NewDetailLimiter(8) // 8 detail pages per hour max
 
 	// Global circuit breaker to detect WAF blocks
 	// Stricter early detection to avoid prolonged blocks
