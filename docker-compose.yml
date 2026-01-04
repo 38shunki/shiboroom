@@ -113,7 +113,7 @@ services:
   # Next.js Frontend (新 - メイン)
   frontend-next:
     build:
-      context: ./frontend-next
+      context: ./frontend
       dockerfile: Dockerfile
     container_name: realestate-frontend-next
     environment:

@@ -58,6 +58,7 @@ type Scraper struct {
 	lastHomepageVisit     time.Time
 	homepageVisitInterval time.Duration
 	lastStations          []StationAccess // Stores stations from the last scrape
+	lastImages            []string        // Stores image URLs from the last scrape
 }
 
 type ScraperConfig struct {
@@ -536,6 +537,15 @@ func (s *Scraper) ScrapePropertyWithReferer(inputURL string, referer string) (*m
 	} else {
 		property.Title = "No Title"
 		log.Printf("[ScrapeProperty] Warning: Could not extract title from %s", normalizedURL)
+	}
+
+	// Clean up title: remove "Yahoo不動産" and related text
+	property.Title = cleanTitle(property.Title)
+
+	// Fallback check after cleanup
+	if property.Title == "" {
+		property.Title = "No Title"
+		log.Printf("[ScrapeProperty] Warning: Title became empty after cleanup for %s", normalizedURL)
 		// Log first 500 chars of HTML to diagnose
 		if htmlContent, err := doc.Html(); err == nil && len(htmlContent) > 0 {
 			previewLen := 500
@@ -546,23 +556,25 @@ func (s *Scraper) ScrapePropertyWithReferer(inputURL string, referer string) (*m
 		}
 	}
 
-	// Try to extract ExternalImageUrl from JSON data embedded in the page
-	// Yahoo Real Estate embeds property data in window.__SERVER_SIDE_CONTEXT__
+	// Extract all image URLs from the page
 	pageHTML, _ := doc.Html()
-	externalImageURL := extractExternalImageFromJSON(pageHTML)
+	allImageURLs := extractAllImageURLsFromJSON(pageHTML)
 
-	if externalImageURL != "" {
-		// Verify external image URL is accessible
-		if s.verifyImageURL(externalImageURL) {
-			property.ImageURL = externalImageURL
-		}
+	// Store all image URLs for later retrieval
+	s.lastImages = allImageURLs
+
+	// Set the first image as the primary image for backward compatibility
+	if len(allImageURLs) > 0 {
+		property.ImageURL = allImageURLs[0]
+		log.Printf("[ScrapeProperty] Set primary image from %d total images", len(allImageURLs))
 	} else {
-		// Fallback to og:image if ExternalImageUrl not found
+		// Fallback to og:image if no images found in JSON
 		if imageURL, exists := doc.Find("meta[property='og:image']").Attr("content"); exists {
 			imageURL = strings.TrimSpace(imageURL)
-			// Verify image URL is accessible
 			if s.verifyImageURL(imageURL) {
 				property.ImageURL = imageURL
+				s.lastImages = []string{imageURL}
+				log.Printf("[ScrapeProperty] Using og:image as fallback")
 			}
 		}
 	}
@@ -1383,6 +1395,40 @@ func normalizeFloorPlan(floorPlan string) string {
 	return floorPlan
 }
 
+// cleanTitle removes unwanted text from property titles
+// Removes "Yahoo不動産" and common suffixes like " - Yahoo!不動産"
+func cleanTitle(title string) string {
+	title = strings.TrimSpace(title)
+
+	// Remove "Yahoo不動産" and variations
+	patterns := []string{
+		"Yahoo不動産",
+		"Yahoo!不動産",
+		"yahoo不動産",
+		"YAHOO不動産",
+	}
+
+	for _, pattern := range patterns {
+		title = strings.ReplaceAll(title, pattern, "")
+	}
+
+	// Remove common separators and trailing text after them
+	// Examples: "物件名 - Yahoo不動産" -> "物件名"
+	separators := []string{" - ", " | ", "｜", " 【"}
+	for _, sep := range separators {
+		if idx := strings.Index(title, sep); idx > 0 {
+			title = title[:idx]
+		}
+	}
+
+	// Remove leading/trailing whitespace and special characters
+	title = strings.TrimSpace(title)
+	title = strings.Trim(title, "- |｜【】")
+	title = strings.TrimSpace(title)
+
+	return title
+}
+
 // normalizeBuildingType normalizes Japanese building types to English codes
 // Uses structure (構造) as primary classifier since RC = mansion, wooden = apartment
 func normalizeBuildingType(buildingType, structure string) string {
@@ -1888,6 +1934,24 @@ func (s *Scraper) GetLastStationsAsModels(propertyID string) []models.PropertySt
 	return convertStationsToModels(propertyID, s.lastStations)
 }
 
+// GetLastImages returns the image URLs from the last scrape
+func (s *Scraper) GetLastImages() []string {
+	return s.lastImages
+}
+
+// GetLastImagesAsModels returns the images from the last scrape as PropertyImage models
+func (s *Scraper) GetLastImagesAsModels(propertyID string) []models.PropertyImage {
+	images := make([]models.PropertyImage, 0, len(s.lastImages))
+	for i, imageURL := range s.lastImages {
+		images = append(images, models.PropertyImage{
+			PropertyID: propertyID,
+			ImageURL:   imageURL,
+			SortOrder:  i,
+		})
+	}
+	return images
+}
+
 // extractAddress extracts address from the document
 func extractAddress(doc *goquery.Document) string {
 	// Try to find address in common patterns
@@ -1990,6 +2054,40 @@ func extractExternalImageFromJSON(html string) string {
 		return imageURL
 	}
 	return ""
+}
+
+// extractAllImageURLsFromJSON extracts all image URLs from embedded JSON data
+// Returns an array of image URLs from the PhotoUrlList or similar fields
+func extractAllImageURLsFromJSON(html string) []string {
+	var imageURLs []string
+
+	// Pattern 1: PhotoUrlList array - "PhotoUrlList":[{"Url":"https://..."}]
+	photoListRe := regexp.MustCompile(`"PhotoUrlList"\s*:\s*\[(.*?)\]`)
+	if matches := photoListRe.FindStringSubmatch(html); len(matches) > 1 {
+		// Extract individual URLs from the array
+		urlRe := regexp.MustCompile(`"Url"\s*:\s*"([^"]+)"`)
+		urlMatches := urlRe.FindAllStringSubmatch(matches[1], -1)
+		for _, urlMatch := range urlMatches {
+			if len(urlMatch) > 1 {
+				imageURL := strings.ReplaceAll(urlMatch[1], `\/`, `/`)
+				imageURLs = append(imageURLs, imageURL)
+			}
+		}
+		if len(imageURLs) > 0 {
+			log.Printf("[extractAllImageURLsFromJSON] Found %d images from PhotoUrlList", len(imageURLs))
+			return imageURLs
+		}
+	}
+
+	// Pattern 2: ExternalImageUrl (fallback for single image)
+	if externalImageURL := extractExternalImageFromJSON(html); externalImageURL != "" {
+		imageURLs = append(imageURLs, externalImageURL)
+		log.Printf("[extractAllImageURLsFromJSON] Found 1 image from ExternalImageUrl")
+		return imageURLs
+	}
+
+	log.Printf("[extractAllImageURLsFromJSON] No images found in JSON")
+	return imageURLs
 }
 
 // verifyImageURL checks if an image URL is accessible (returns HTTP 200)

@@ -2,6 +2,8 @@ package database
 
 import (
 	"crypto/md5"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"real-estate-portal/internal/models"
@@ -127,13 +129,36 @@ func (gdb *GormDB) GetAllProperties() ([]models.Property, error) {
 
 // PropertyFilters holds filter parameters for property search
 type PropertyFilters struct {
+	// Station/Line filters
 	Station  string // Partial match on station_name
 	Line     string // Partial match on line_name
 	MaxWalk  int    // Maximum walk time in minutes (0 = no filter)
 	WalkMode string // "nearest" (use properties.walk_time) or "any" (use property_stations)
+
+	// Range filters
+	MinRent        *int     // Minimum rent (万円単位)
+	MaxRent        *int     // Maximum rent (万円単位)
+	MinArea        *float64 // Minimum area (㎡)
+	MaxArea        *float64 // Maximum area (㎡)
+	MinBuildingAge *int     // Minimum building age (years)
+	MaxBuildingAge *int     // Maximum building age (years)
+	MinFloor       *int     // Minimum floor
+	MaxFloor       *int     // Maximum floor
+
+	// Multi-select filters
+	FloorPlans     []string // Floor plan types (1K, 1DK, etc.)
+	BuildingTypes  []string // Building types (mansion, apartment, etc.)
+	Facilities     []string // Required facilities
+
+	// Exclude filters
+	ExcludeIDs     []string // Property IDs to exclude
+	ExcludeStatuses []string // Statuses to exclude (default: exclude "removed")
+
+	// Sort & Pagination
 	SortBy   string // Sort parameter
-	Limit    int    // Number of records to return (default: 50, max: 200)
-	Offset   int    // Number of records to skip (default: 0)
+	Limit    int    // Number of records to return (default: 50, max: 20000)
+	Offset   *int   // Number of records to skip (legacy, optional)
+	Cursor   string // Cursor for keyset pagination (new method)
 }
 
 // PaginatedPropertiesResponse holds paginated property results
@@ -141,7 +166,116 @@ type PaginatedPropertiesResponse struct {
 	Properties []models.Property `json:"properties"`
 	Total      int64             `json:"total"`
 	Limit      int               `json:"limit"`
-	Offset     int               `json:"offset"`
+	Offset     int               `json:"offset,omitempty"`     // Legacy field (optional)
+	NextCursor string            `json:"next_cursor,omitempty"` // Cursor for next page
+}
+
+// CursorData holds the decoded cursor information
+type CursorData struct {
+	FetchedAt string `json:"t"`  // Timestamp in RFC3339 format
+	ID        string `json:"id"` // Property ID
+}
+
+// DecodeCursor decodes a base64-encoded JSON cursor
+func DecodeCursor(cursor string) (*CursorData, error) {
+	if cursor == "" {
+		return nil, nil
+	}
+
+	// Decode base64
+	decoded, err := base64.URLEncoding.DecodeString(cursor)
+	if err != nil {
+		return nil, fmt.Errorf("invalid cursor: base64 decode failed")
+	}
+
+	// Parse JSON
+	var data CursorData
+	if err := json.Unmarshal(decoded, &data); err != nil {
+		return nil, fmt.Errorf("invalid cursor: JSON parse failed")
+	}
+
+	// Validate required fields
+	if data.FetchedAt == "" || data.ID == "" {
+		return nil, fmt.Errorf("invalid cursor: missing required fields")
+	}
+
+	// Validate timestamp format
+	if _, err := time.Parse(time.RFC3339, data.FetchedAt); err != nil {
+		return nil, fmt.Errorf("invalid cursor: invalid timestamp format")
+	}
+
+	return &data, nil
+}
+
+// EncodeCursor creates a base64-encoded JSON cursor
+func EncodeCursor(fetchedAt time.Time, id string) string {
+	data := CursorData{
+		FetchedAt: fetchedAt.Format(time.RFC3339),
+		ID:        id,
+	}
+
+	jsonData, _ := json.Marshal(data)
+	return base64.URLEncoding.EncodeToString(jsonData)
+}
+
+// ValidateAndNormalize validates filter parameters and returns error if invalid
+func (f *PropertyFilters) ValidateAndNormalize() error {
+	// Validate range filters (min <= max)
+	if f.MinRent != nil && f.MaxRent != nil && *f.MinRent > *f.MaxRent {
+		return fmt.Errorf("min_rent cannot be greater than max_rent")
+	}
+	if f.MinArea != nil && f.MaxArea != nil && *f.MinArea > *f.MaxArea {
+		return fmt.Errorf("min_area cannot be greater than max_area")
+	}
+	if f.MinBuildingAge != nil && f.MaxBuildingAge != nil && *f.MinBuildingAge > *f.MaxBuildingAge {
+		return fmt.Errorf("min_building_age cannot be greater than max_building_age")
+	}
+	if f.MinFloor != nil && f.MaxFloor != nil && *f.MinFloor > *f.MaxFloor {
+		return fmt.Errorf("min_floor cannot be greater than max_floor")
+	}
+
+	// Validate array limits (prevent abuse)
+	if len(f.FloorPlans) > 20 {
+		return fmt.Errorf("floor_plans: maximum 20 items allowed")
+	}
+	if len(f.BuildingTypes) > 10 {
+		return fmt.Errorf("building_types: maximum 10 items allowed")
+	}
+	if len(f.Facilities) > 30 {
+		return fmt.Errorf("facilities: maximum 30 items allowed")
+	}
+	if len(f.ExcludeIDs) > 500 {
+		return fmt.Errorf("exclude_ids: maximum 500 items allowed")
+	}
+
+	// Validate sort parameter (whitelist)
+	validSorts := map[string]bool{
+		"":                  true, // default
+		"newest":            true,
+		"fetched_at":        true,
+		"fetched_at_desc":   true,
+		"fetched_at_asc":    true,
+		"rent_asc":          true,
+		"rent_desc":         true,
+		"area_desc":         true,
+		"area_asc":          true,
+		"walk_time_asc":     true,
+		"building_age_asc":  true,
+		"building_age_desc": true,
+	}
+	if !validSorts[f.SortBy] {
+		return fmt.Errorf("invalid sort parameter: %s", f.SortBy)
+	}
+
+	// Set defaults
+	if f.Limit <= 0 {
+		f.Limit = 50
+	}
+	if f.Limit > 20000 {
+		f.Limit = 20000
+	}
+
+	return nil
 }
 
 // GetPropertiesWithSort retrieves all properties with custom sorting
@@ -207,62 +341,122 @@ func (gdb *GormDB) GetPropertiesWithFilters(filters PropertyFilters) ([]models.P
 	return properties, err
 }
 
-// GetPropertiesWithFiltersPaginated retrieves properties with filtering, sorting, and pagination
-func (gdb *GormDB) GetPropertiesWithFiltersPaginated(filters PropertyFilters) (*PaginatedPropertiesResponse, error) {
-	// Set default limit if not specified
-	if filters.Limit <= 0 {
-		filters.Limit = 50
-	}
-	// Cap maximum limit at 200
-	if filters.Limit > 200 {
-		filters.Limit = 200
-	}
-	// Ensure offset is non-negative
-	if filters.Offset < 0 {
-		filters.Offset = 0
-	}
+// applyFilters applies all WHERE conditions to the query (shared by COUNT and LIST)
+func (gdb *GormDB) applyFilters(query *gorm.DB, filters PropertyFilters) *gorm.DB {
+	// Default: exclude removed properties
+	query = query.Where("status = ?", "active")
 
-	// Start building query
-	query := gdb.db.Model(&models.Property{})
-
-	// Apply station filter (EXISTS on property_stations)
+	// Station filter (EXISTS on property_stations)
 	if filters.Station != "" {
 		query = query.Where("EXISTS (SELECT 1 FROM property_stations ps WHERE ps.property_id = properties.id AND ps.station_name LIKE ?)",
 			"%"+filters.Station+"%")
 	}
 
-	// Apply line filter (EXISTS on property_stations)
+	// Line filter (EXISTS on property_stations)
 	if filters.Line != "" {
 		query = query.Where("EXISTS (SELECT 1 FROM property_stations ps WHERE ps.property_id = properties.id AND ps.line_name LIKE ?)",
 			"%"+filters.Line+"%")
 	}
 
-	// Apply walk time filter
+	// Walk time filter
 	if filters.MaxWalk > 0 {
 		if filters.WalkMode == "any" {
-			// Any station within MaxWalk minutes
 			query = query.Where("EXISTS (SELECT 1 FROM property_stations ps WHERE ps.property_id = properties.id AND ps.walk_minutes IS NOT NULL AND ps.walk_minutes <= ?)",
 				filters.MaxWalk)
 		} else {
-			// Default: nearest station only (compatibility with legacy walk_time field)
 			query = query.Where("walk_time IS NOT NULL AND walk_time <= ?", filters.MaxWalk)
 		}
 	}
 
-	// Get total count BEFORE pagination
-	var total int64
-	if err := query.Count(&total).Error; err != nil {
+	// Rent range filter
+	if filters.MinRent != nil {
+		query = query.Where("rent >= ?", *filters.MinRent*10000) // Convert 万円 to 円
+	}
+	if filters.MaxRent != nil {
+		query = query.Where("rent <= ?", *filters.MaxRent*10000)
+	}
+
+	// Area range filter
+	if filters.MinArea != nil {
+		query = query.Where("area >= ?", *filters.MinArea)
+	}
+	if filters.MaxArea != nil {
+		query = query.Where("area <= ?", *filters.MaxArea)
+	}
+
+	// Building age range filter
+	if filters.MinBuildingAge != nil {
+		query = query.Where("building_age >= ?", *filters.MinBuildingAge)
+	}
+	if filters.MaxBuildingAge != nil {
+		query = query.Where("building_age <= ?", *filters.MaxBuildingAge)
+	}
+
+	// Floor range filter
+	if filters.MinFloor != nil {
+		query = query.Where("floor >= ?", *filters.MinFloor)
+	}
+	if filters.MaxFloor != nil {
+		query = query.Where("floor <= ?", *filters.MaxFloor)
+	}
+
+	// Floor plans filter (multi-select)
+	if len(filters.FloorPlans) > 0 {
+		query = query.Where("floor_plan IN ?", filters.FloorPlans)
+	}
+
+	// Building types filter (multi-select)
+	if len(filters.BuildingTypes) > 0 {
+		query = query.Where("building_type IN ?", filters.BuildingTypes)
+	}
+
+	// Facilities filter (JSON array contains - requires MySQL JSON functions or simple LIKE)
+	if len(filters.Facilities) > 0 {
+		for _, facility := range filters.Facilities {
+			query = query.Where("facilities LIKE ?", "%\""+facility+"\"%")
+		}
+	}
+
+	// Exclude IDs filter
+	if len(filters.ExcludeIDs) > 0 {
+		query = query.Where("id NOT IN ?", filters.ExcludeIDs)
+	}
+
+	return query
+}
+
+// GetPropertiesWithFiltersPaginated retrieves properties with filtering, sorting, and pagination
+func (gdb *GormDB) GetPropertiesWithFiltersPaginated(filters PropertyFilters) (*PaginatedPropertiesResponse, error) {
+	// Validate filters
+	if err := filters.ValidateAndNormalize(); err != nil {
 		return nil, err
 	}
+
+	// Build base query for COUNT (no cursor condition)
+	countQuery := gdb.db.Model(&models.Property{})
+	countQuery = gdb.applyFilters(countQuery, filters)
+
+	// Get total count BEFORE pagination (cursor does NOT affect total)
+	var total int64
+	if err := countQuery.Count(&total).Error; err != nil {
+		return nil, err
+	}
+
+	// Build query for LIST (with cursor condition if present)
+	listQuery := gdb.db.Model(&models.Property{})
+	listQuery = gdb.applyFilters(listQuery, filters)
 
 	// Map sort parameter to SQL ORDER BY clause (MySQL syntax)
 	// Use CASE to put NULLs last for ASC, first for DESC
 	var orderClause string
+	isCursorCompatible := false // Only newest/fetched_at sorts support cursor
+
 	switch filters.SortBy {
-	case "fetched_at", "fetched_at_desc":
-		orderClause = "fetched_at DESC"
+	case "newest", "fetched_at", "fetched_at_desc", "":
+		orderClause = "fetched_at DESC, id DESC"
+		isCursorCompatible = true
 	case "fetched_at_asc":
-		orderClause = "fetched_at ASC"
+		orderClause = "fetched_at ASC, id ASC"
 	case "rent_asc":
 		orderClause = "CASE WHEN rent IS NULL THEN 1 ELSE 0 END, rent ASC"
 	case "rent_desc":
@@ -274,26 +468,61 @@ func (gdb *GormDB) GetPropertiesWithFiltersPaginated(filters PropertyFilters) (*
 	case "building_age_asc":
 		orderClause = "CASE WHEN building_age IS NULL THEN 1 ELSE 0 END, building_age ASC"
 	default:
-		// Default to newest first (by fetched_at)
-		orderClause = "fetched_at DESC"
+		orderClause = "fetched_at DESC, id DESC"
+		isCursorCompatible = true
 	}
 
-	// Apply pagination and fetch results
+	// Apply cursor condition for cursor-compatible sorts
+	if filters.Cursor != "" && isCursorCompatible {
+		cursorData, err := DecodeCursor(filters.Cursor)
+		if err != nil {
+			return nil, err
+		}
+
+		// Parse timestamp
+		cursorTime, err := time.Parse(time.RFC3339, cursorData.FetchedAt)
+		if err != nil {
+			return nil, fmt.Errorf("invalid cursor timestamp")
+		}
+
+		// Apply cursor condition: (fetched_at < cursor_time) OR (fetched_at = cursor_time AND id < cursor_id)
+		listQuery = listQuery.Where(
+			"(fetched_at < ?) OR (fetched_at = ? AND id < ?)",
+			cursorTime, cursorTime, cursorData.ID,
+		)
+	}
+
+	// Apply pagination
 	var properties []models.Property
-	err := query.Order(orderClause).
+	offset := 0
+
+	// Use offset only if cursor is not present (legacy compatibility)
+	if filters.Cursor == "" && filters.Offset != nil {
+		offset = *filters.Offset
+	}
+
+	err := listQuery.Order(orderClause).
 		Limit(filters.Limit).
-		Offset(filters.Offset).
+		Offset(offset).
 		Find(&properties).Error
 
 	if err != nil {
 		return nil, err
 	}
 
+	// Generate next_cursor for cursor-compatible sorts
+	var nextCursor string
+	if isCursorCompatible && len(properties) == filters.Limit {
+		lastProperty := properties[len(properties)-1]
+		nextCursor = EncodeCursor(lastProperty.FetchedAt, lastProperty.ID)
+	}
+
 	return &PaginatedPropertiesResponse{
 		Properties: properties,
 		Total:      total,
 		Limit:      filters.Limit,
-		Offset:     filters.Offset,
+		Offset:     offset,
+		NextCursor: nextCursor,
 	}, nil
 }
 
@@ -387,6 +616,81 @@ func (gdb *GormDB) SavePropertyWithStations(p *models.Property, stations []model
 
 		return nil
 	})
+}
+
+// SavePropertyWithStationsAndImages saves a property with its stations and images in a transaction
+func (gdb *GormDB) SavePropertyWithStationsAndImages(p *models.Property, stations []models.PropertyStation, images []models.PropertyImage) error {
+	// Generate ID from normalized URL if not set
+	if p.ID == "" {
+		normalizedURL := normalizeURL(p.DetailURL)
+		p.ID = generateMD5(normalizedURL)
+	}
+
+	// Set FetchedAt to now if not set
+	if p.FetchedAt.IsZero() {
+		p.FetchedAt = time.Now()
+	}
+
+	// Set default status to active if not set
+	if p.Status == "" {
+		p.Status = models.PropertyStatusActive
+	}
+
+	// Use transaction to save property, stations, and images
+	return gdb.db.Transaction(func(tx *gorm.DB) error {
+		// Upsert property: try to find existing
+		var existing models.Property
+		result := tx.Where("detail_url = ?", p.DetailURL).First(&existing)
+
+		if result.Error == gorm.ErrRecordNotFound {
+			// Create new property
+			if err := tx.Create(p).Error; err != nil {
+				return err
+			}
+		} else if result.Error != nil {
+			return result.Error
+		} else {
+			// Update existing property
+			p.ID = existing.ID // Preserve existing ID
+			p.CreatedAt = existing.CreatedAt // Preserve creation time
+			if err := tx.Save(p).Error; err != nil {
+				return err
+			}
+		}
+
+		// Delete existing stations for this property
+		if err := tx.Where("property_id = ?", p.ID).Delete(&models.PropertyStation{}).Error; err != nil {
+			return err
+		}
+
+		// Insert new stations
+		if len(stations) > 0 {
+			if err := tx.Create(&stations).Error; err != nil {
+				return err
+			}
+		}
+
+		// Delete existing images for this property
+		if err := tx.Where("property_id = ?", p.ID).Delete(&models.PropertyImage{}).Error; err != nil {
+			return err
+		}
+
+		// Insert new images
+		if len(images) > 0 {
+			if err := tx.Create(&images).Error; err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+}
+
+// GetPropertyImages retrieves all images for a property
+func (gdb *GormDB) GetPropertyImages(propertyID string) ([]models.PropertyImage, error) {
+	var images []models.PropertyImage
+	err := gdb.db.Where("property_id = ?", propertyID).Order("sort_order ASC").Find(&images).Error
+	return images, err
 }
 
 // GetActiveProperties retrieves all active properties

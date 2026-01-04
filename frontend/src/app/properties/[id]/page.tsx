@@ -57,6 +57,15 @@ interface PropertyStation {
   updated_at: string
 }
 
+interface PropertyImage {
+  id: number
+  property_id: string
+  image_url: string
+  sort_order: number
+  created_at: string
+  updated_at: string
+}
+
 interface PropertySnapshot {
   id: number
   property_id: string
@@ -94,14 +103,31 @@ export default function PropertyDetailPage() {
 
   const [property, setProperty] = useState<Property | null>(null)
   const [stations, setStations] = useState<PropertyStation[]>([])
+  const [images, setImages] = useState<PropertyImage[]>([])
+  const [currentImageIndex, setCurrentImageIndex] = useState(0)
   const [snapshots, setSnapshots] = useState<PropertySnapshot[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState<'overview' | 'history'>('overview')
+  const [activeTab, setActiveTab] = useState<'overview' | 'memo' | 'history'>('overview')
+  const [memo, setMemo] = useState<string>('')
+  const [showMemoInput, setShowMemoInput] = useState(false)
+  const [memoText, setMemoText] = useState('')
+  const [propertyStatus, setPropertyStatus] = useState<'none' | 'candidate' | 'maybe' | 'excluded'>('none')
 
   useEffect(() => {
     if (propertyId) {
       fetchPropertyDetails()
+      // Load memo from localStorage
+      const savedMemo = localStorage.getItem(`property_memo_${propertyId}`)
+      if (savedMemo) {
+        setMemo(savedMemo)
+        setMemoText(savedMemo)
+      }
+      // Load property status from localStorage
+      const savedStatus = localStorage.getItem(`property_status_${propertyId}`)
+      if (savedStatus && (savedStatus === 'candidate' || savedStatus === 'maybe' || savedStatus === 'excluded')) {
+        setPropertyStatus(savedStatus as 'candidate' | 'maybe' | 'excluded')
+      }
     }
   }, [propertyId])
 
@@ -117,14 +143,16 @@ export default function PropertyDetailPage() {
       }
       const responseData = await propertyResponse.json()
 
-      // Handle new response format: {property, stations}
+      // Handle new response format: {property, stations, images}
       if (responseData.property) {
         setProperty(responseData.property)
         setStations(responseData.stations || [])
+        setImages(responseData.images || [])
       } else {
         // Fallback for old format (direct property object)
         setProperty(responseData)
         setStations([])
+        setImages([])
       }
 
       // Fetch snapshot history
@@ -137,6 +165,29 @@ export default function PropertyDetailPage() {
       setError(err instanceof Error ? err.message : '読み込みエラーが発生しました')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleMemoSave = () => {
+    localStorage.setItem(`property_memo_${propertyId}`, memoText)
+    setMemo(memoText)
+    setShowMemoInput(false)
+  }
+
+  const handleMemoCancel = () => {
+    setMemoText(memo)
+    setShowMemoInput(false)
+  }
+
+  const handleStatusChange = (newStatus: 'candidate' | 'maybe' | 'excluded') => {
+    if (propertyStatus === newStatus) {
+      // Toggle off - remove status
+      localStorage.removeItem(`property_status_${propertyId}`)
+      setPropertyStatus('none')
+    } else {
+      // Set new status
+      localStorage.setItem(`property_status_${propertyId}`, newStatus)
+      setPropertyStatus(newStatus)
     }
   }
 
@@ -311,7 +362,9 @@ export default function PropertyDetailPage() {
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
               <path d="m15 18-6-6 6-6"/>
             </svg>
-            <span>一覧に戻る</span>
+          </Link>
+          <Link href="/" className="back-button-text">
+            一覧に戻る
           </Link>
         </div>
         <nav className="tab-nav">
@@ -320,6 +373,13 @@ export default function PropertyDetailPage() {
             onClick={() => setActiveTab('overview')}
           >
             物件詳細
+          </button>
+          <button
+            className={`tab-btn ${activeTab === 'memo' ? 'active' : ''}`}
+            onClick={() => setActiveTab('memo')}
+          >
+            メモ・ステータス
+            {(memo || propertyStatus !== 'none') && <span className="tab-indicator">●</span>}
           </button>
           <button
             className={`tab-btn ${activeTab === 'history' ? 'active' : ''}`}
@@ -335,16 +395,153 @@ export default function PropertyDetailPage() {
         {activeTab === 'overview' && (
           <div className="overview-section">
             <div className="property-hero">
-              {property.image_url && (
+              {/* Image Gallery */}
+              {images.length > 0 ? (
+                <div className="property-image-gallery">
+                  <div className="gallery-main-image">
+                    <img
+                      src={images[currentImageIndex]?.image_url}
+                      alt={`${property.title} - 画像${currentImageIndex + 1}`}
+                    />
+                    {images.length > 1 && (
+                      <>
+                        <button
+                          className="gallery-nav gallery-nav-prev"
+                          onClick={() => setCurrentImageIndex(prev => prev === 0 ? images.length - 1 : prev - 1)}
+                          aria-label="前の画像"
+                        >
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path d="m15 18-6-6 6-6"/>
+                          </svg>
+                        </button>
+                        <button
+                          className="gallery-nav gallery-nav-next"
+                          onClick={() => setCurrentImageIndex(prev => prev === images.length - 1 ? 0 : prev + 1)}
+                          aria-label="次の画像"
+                        >
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path d="m9 18 6-6-6-6"/>
+                          </svg>
+                        </button>
+                        <div className="gallery-counter">
+                          {currentImageIndex + 1} / {images.length}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                  {images.length > 1 && (
+                    <div className="gallery-thumbnails">
+                      {images.map((image, index) => (
+                        <button
+                          key={image.id}
+                          className={`gallery-thumbnail ${index === currentImageIndex ? 'active' : ''}`}
+                          onClick={() => setCurrentImageIndex(index)}
+                        >
+                          <img src={image.image_url} alt={`サムネイル${index + 1}`} />
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : property.image_url ? (
                 <div className="property-hero-image">
                   <img src={property.image_url} alt={property.title} />
                 </div>
-              )}
+              ) : null}
+
               <div className="property-hero-content">
                 <h1 className="property-title">{property.title}</h1>
                 {property.rent && (
                   <div className="property-rent-large">
                     {formatRent(property.rent)}<span>万円</span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Status and Memo Section */}
+            <div className="detail-status-memo-section">
+              <div className="detail-card-full">
+                <h3 className="detail-card-title">ステータス</h3>
+                <div className="property-actions">
+                  <button
+                    className={`status-btn candidate ${propertyStatus === 'candidate' ? 'active' : ''}`}
+                    onClick={() => handleStatusChange('candidate')}
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+                    </svg>
+                    候補
+                  </button>
+                  <button
+                    className={`status-btn maybe ${propertyStatus === 'maybe' ? 'active' : ''}`}
+                    onClick={() => handleStatusChange('maybe')}
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <circle cx="12" cy="12" r="10"/>
+                      <path d="M12 8v4"/>
+                      <path d="M12 16h.01"/>
+                    </svg>
+                    保留
+                  </button>
+                  <button
+                    className={`status-btn exclude ${propertyStatus === 'excluded' ? 'active' : ''}`}
+                    onClick={() => handleStatusChange('excluded')}
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M1 1l22 22"/>
+                      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
+                    </svg>
+                    非表示
+                  </button>
+                </div>
+
+                <div className="memo-section-divider"></div>
+
+                {!showMemoInput && !memo && (
+                  <button
+                    className="memo-add-btn"
+                    onClick={() => setShowMemoInput(true)}
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                    </svg>
+                    メモを追加
+                  </button>
+                )}
+
+                {!showMemoInput && memo && (
+                  <div className="property-memo-display" onClick={() => setShowMemoInput(true)}>
+                    <div className="memo-display-header">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                      </svg>
+                      <span>メモ</span>
+                    </div>
+                    <p className="memo-display-text">{memo}</p>
+                  </div>
+                )}
+
+                {showMemoInput && (
+                  <div className="property-memo-input">
+                    <textarea
+                      className="memo-textarea"
+                      value={memoText}
+                      onChange={(e) => setMemoText(e.target.value)}
+                      placeholder="メモを入力（却下理由・内見メモなど）"
+                      rows={4}
+                      autoFocus
+                    />
+                    <div className="memo-actions">
+                      <button className="memo-save-btn" onClick={handleMemoSave}>
+                        保存
+                      </button>
+                      <button className="memo-cancel-btn" onClick={handleMemoCancel}>
+                        キャンセル
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -599,13 +796,102 @@ export default function PropertyDetailPage() {
                 target="_blank"
                 rel="noreferrer"
               >
-                Yahoo!不動産で詳細を見る
+                元サイトで詳細を見る
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
                   <polyline points="15 3 21 3 21 9"/>
                   <line x1="10" x2="21" y1="14" y2="3"/>
                 </svg>
               </a>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'memo' && (
+          <div className="memo-status-section">
+            <div className="detail-card-full">
+              <h3 className="detail-card-title">ステータス</h3>
+              <div className="property-actions">
+                <button
+                  className={`status-btn candidate ${propertyStatus === 'candidate' ? 'active' : ''}`}
+                  onClick={() => handleStatusChange('candidate')}
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+                  </svg>
+                  候補
+                </button>
+                <button
+                  className={`status-btn maybe ${propertyStatus === 'maybe' ? 'active' : ''}`}
+                  onClick={() => handleStatusChange('maybe')}
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <circle cx="12" cy="12" r="10"/>
+                    <path d="M12 8v4"/>
+                    <path d="M12 16h.01"/>
+                  </svg>
+                  保留
+                </button>
+                <button
+                  className={`status-btn exclude ${propertyStatus === 'excluded' ? 'active' : ''}`}
+                  onClick={() => handleStatusChange('excluded')}
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M1 1l22 22"/>
+                    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
+                  </svg>
+                  非表示
+                </button>
+              </div>
+
+              <div className="memo-section-divider"></div>
+
+              {!showMemoInput && !memo && (
+                <button
+                  className="memo-add-btn"
+                  onClick={() => setShowMemoInput(true)}
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                  </svg>
+                  メモを追加
+                </button>
+              )}
+
+              {!showMemoInput && memo && (
+                <div className="property-memo-display" onClick={() => setShowMemoInput(true)}>
+                  <div className="memo-display-header">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                    </svg>
+                    <span>メモ</span>
+                  </div>
+                  <p className="memo-display-text">{memo}</p>
+                </div>
+              )}
+
+              {showMemoInput && (
+                <div className="property-memo-input">
+                  <textarea
+                    className="memo-textarea"
+                    value={memoText}
+                    onChange={(e) => setMemoText(e.target.value)}
+                    placeholder="メモを入力（却下理由・内見メモなど）"
+                    rows={6}
+                    autoFocus
+                  />
+                  <div className="memo-actions">
+                    <button className="memo-save-btn" onClick={handleMemoSave}>
+                      保存
+                    </button>
+                    <button className="memo-cancel-btn" onClick={handleMemoCancel}>
+                      キャンセル
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}

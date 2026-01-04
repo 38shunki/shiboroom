@@ -250,20 +250,83 @@ func healthCheck(c *gin.Context) {
 func getProperties(c *gin.Context) {
 	// Build filters from query parameters
 	filters := database.PropertyFilters{
-		Station:  c.Query("station"),   // e.g., ?station=新宿
-		Line:     c.Query("line"),      // e.g., ?line=大江戸線
-		WalkMode: c.DefaultQuery("walk_mode", "nearest"), // "nearest" or "any"
+		Station:  c.Query("station"),
+		Line:     c.Query("line"),
+		WalkMode: c.DefaultQuery("walk_mode", "nearest"),
 		SortBy:   c.DefaultQuery("sort", "fetched_at"),
+		Cursor:   c.Query("cursor"),
 	}
 
-	// Parse max_walk parameter
+	// Parse numeric parameters
 	if maxWalkStr := c.Query("max_walk"); maxWalkStr != "" {
 		if maxWalk, parseErr := strconv.Atoi(maxWalkStr); parseErr == nil && maxWalk > 0 {
 			filters.MaxWalk = maxWalk
 		}
 	}
 
-	// Parse pagination parameters (limit and offset)
+	// Rent range
+	if minRentStr := c.Query("min_rent"); minRentStr != "" {
+		if minRent, parseErr := strconv.Atoi(minRentStr); parseErr == nil {
+			filters.MinRent = &minRent
+		}
+	}
+	if maxRentStr := c.Query("max_rent"); maxRentStr != "" {
+		if maxRent, parseErr := strconv.Atoi(maxRentStr); parseErr == nil {
+			filters.MaxRent = &maxRent
+		}
+	}
+
+	// Area range
+	if minAreaStr := c.Query("min_area"); minAreaStr != "" {
+		if minArea, parseErr := strconv.ParseFloat(minAreaStr, 64); parseErr == nil {
+			filters.MinArea = &minArea
+		}
+	}
+	if maxAreaStr := c.Query("max_area"); maxAreaStr != "" {
+		if maxArea, parseErr := strconv.ParseFloat(maxAreaStr, 64); parseErr == nil {
+			filters.MaxArea = &maxArea
+		}
+	}
+
+	// Building age range
+	if minAgeStr := c.Query("min_building_age"); minAgeStr != "" {
+		if minAge, parseErr := strconv.Atoi(minAgeStr); parseErr == nil {
+			filters.MinBuildingAge = &minAge
+		}
+	}
+	if maxAgeStr := c.Query("max_building_age"); maxAgeStr != "" {
+		if maxAge, parseErr := strconv.Atoi(maxAgeStr); parseErr == nil {
+			filters.MaxBuildingAge = &maxAge
+		}
+	}
+
+	// Floor range
+	if minFloorStr := c.Query("min_floor"); minFloorStr != "" {
+		if minFloor, parseErr := strconv.Atoi(minFloorStr); parseErr == nil {
+			filters.MinFloor = &minFloor
+		}
+	}
+	if maxFloorStr := c.Query("max_floor"); maxFloorStr != "" {
+		if maxFloor, parseErr := strconv.Atoi(maxFloorStr); parseErr == nil {
+			filters.MaxFloor = &maxFloor
+		}
+	}
+
+	// Multi-select filters (comma-separated)
+	if floorPlansStr := c.Query("floor_plans"); floorPlansStr != "" {
+		filters.FloorPlans = strings.Split(floorPlansStr, ",")
+	}
+	if buildingTypesStr := c.Query("building_types"); buildingTypesStr != "" {
+		filters.BuildingTypes = strings.Split(buildingTypesStr, ",")
+	}
+	if facilitiesStr := c.Query("facilities"); facilitiesStr != "" {
+		filters.Facilities = strings.Split(facilitiesStr, ",")
+	}
+	if excludeIDsStr := c.Query("exclude_ids"); excludeIDsStr != "" {
+		filters.ExcludeIDs = strings.Split(excludeIDsStr, ",")
+	}
+
+	// Pagination parameters
 	if limitStr := c.Query("limit"); limitStr != "" {
 		if limit, parseErr := strconv.Atoi(limitStr); parseErr == nil && limit > 0 {
 			filters.Limit = limit
@@ -272,37 +335,40 @@ func getProperties(c *gin.Context) {
 
 	if offsetStr := c.Query("offset"); offsetStr != "" {
 		if offset, parseErr := strconv.Atoi(offsetStr); parseErr == nil && offset >= 0 {
-			filters.Offset = offset
+			filters.Offset = &offset
 		}
 	}
 
-	// Use paginated endpoint if limit is specified or if using GORM
-	if gormDB != nil && (filters.Limit > 0 || c.Query("limit") != "") {
+	// Cursor parameter (for cursor-based pagination)
+	if cursor := c.Query("cursor"); cursor != "" {
+		filters.Cursor = cursor
+	}
+
+	// Always use paginated endpoint with GORM
+	if gormDB != nil {
+		start := time.Now()
 		result, err := gormDB.GetPropertiesWithFiltersPaginated(filters)
+		duration := time.Since(start)
+
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
+
+		// Log search API performance for monitoring
+		log.Printf("[Search API] duration_ms=%d total=%d limit=%d has_cursor=%v sort=%s",
+			duration.Milliseconds(), result.Total, result.Limit, filters.Cursor != "", filters.SortBy)
+
 		c.JSON(http.StatusOK, result)
 		return
 	}
 
-	// Legacy non-paginated response for backward compatibility
-	var properties []models.Property
-	var err error
-
-	if gormDB != nil {
-		properties, err = gormDB.GetPropertiesWithFilters(filters)
-	} else {
-		// Legacy database doesn't support filters, fall back to sort-only
-		properties, err = db.GetPropertiesWithSort(filters.SortBy)
-	}
-
+	// Legacy fallback (should not be reached in production)
+	properties, err := db.GetPropertiesWithSort(filters.SortBy)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-
 	c.JSON(http.StatusOK, properties)
 }
 
@@ -322,16 +388,19 @@ func getProperty(c *gin.Context) {
 		return
 	}
 
-	// Fetch stations if using GORM
+	// Fetch stations and images if using GORM
 	var stations []models.PropertyStation
+	var images []models.PropertyImage
 	if gormDB != nil {
 		stations, _ = gormDB.GetPropertyStations(id)
+		images, _ = gormDB.GetPropertyImages(id)
 	}
 
-	// Create response with stations
+	// Create response with stations and images
 	response := gin.H{
 		"property": property,
 		"stations": stations,
+		"images":   images,
 	}
 
 	c.JSON(http.StatusOK, response)
@@ -372,18 +441,22 @@ func scrapeURL(c *gin.Context) {
 		return
 	}
 
-	// Save to database with stations (if using GORM)
+	// Save to database with stations and images (if using GORM)
 	if gormDB != nil {
-		// Get stations from scraper and convert to models
+		// Get stations and images from scraper and convert to models
 		stations := s.GetLastStationsAsModels(property.ID)
-		err = gormDB.SavePropertyWithStations(property, stations)
+		images := s.GetLastImagesAsModels(property.ID)
+		err = gormDB.SavePropertyWithStationsAndImages(property, stations, images)
 
-		// Log station save operation
+		// Log station and image save operation
 		if err == nil {
 			if len(stations) == 0 {
 				log.Printf("[stations] property_id=%s stations_len=0 skip_delete_preserve_existing", property.ID)
 			} else {
 				log.Printf("[stations] property_id=%s stations_len=%d saved", property.ID, len(stations))
+			}
+			if len(images) > 0 {
+				log.Printf("[images] property_id=%s images_len=%d saved", property.ID, len(images))
 			}
 		}
 	} else {

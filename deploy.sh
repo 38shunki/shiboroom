@@ -71,19 +71,18 @@ if [ "$DEPLOY_BACKEND" = true ]; then
 
   echo "🚀 Deploying on server..."
   ssh "$SERVER" << 'ENDSSH'
-    # Backup
+    # Backup (no sudo needed - grik owns the directory)
     if [ -f /var/www/shiboroom/backend/shiboroom-api ]; then
       echo "💾 Backing up current binary..."
-      sudo cp /var/www/shiboroom/backend/shiboroom-api /var/www/shiboroom/backend/shiboroom-api.backup
+      cp /var/www/shiboroom/backend/shiboroom-api /var/www/shiboroom/backend/shiboroom-api.backup.$(date +%Y%m%d_%H%M%S)
     fi
 
-    # Install
+    # Install (no sudo needed - grik owns the directory)
     echo "📂 Installing new binary..."
-    sudo mv /tmp/shiboroom-api /var/www/shiboroom/backend/
-    sudo chown grik:grik /var/www/shiboroom/backend/shiboroom-api
-    sudo chmod +x /var/www/shiboroom/backend/shiboroom-api
+    mv /tmp/shiboroom-api /var/www/shiboroom/backend/shiboroom-api
+    chmod +x /var/www/shiboroom/backend/shiboroom-api
 
-    # Restart
+    # Restart (only this needs sudo)
     echo "🔄 Restarting backend service..."
     sudo systemctl restart shiboroom-backend
 
@@ -171,7 +170,7 @@ if [ "$DEPLOY_FRONTEND" = true ]; then
     cp -r .next/static .next/standalone/.next/
     cp -r public .next/standalone/
 
-    # Restart service
+    # Restart service (only this needs sudo)
     echo "🔄 Restarting frontend service..."
     sudo systemctl restart shiboroom-frontend
 

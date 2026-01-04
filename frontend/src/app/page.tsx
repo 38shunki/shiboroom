@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8084'
@@ -58,10 +58,16 @@ export default function Home() {
   const [hiddenProperties, setHiddenProperties] = useState<Set<string>>(new Set())
   const [propertyMemos, setPropertyMemos] = useState<Record<string, string>>({})
 
-  // Pagination state
-  const [currentPage, setCurrentPage] = useState(1)
-  const [totalProperties, setTotalProperties] = useState(0)
-  const propertiesPerPage = 50
+  // Pagination state (server-side)
+  const [totalCount, setTotalCount] = useState(0)
+  const [offset, setOffset] = useState(0)
+  const [hasMore, setHasMore] = useState(true)
+  const [isLoadingMore, setIsLoadingMore] = useState(false)
+  const [nextCursor, setNextCursor] = useState<string | null>(null)
+  const limit = 50
+
+  // AbortController for race condition prevention (reset searches only)
+  const searchAbortControllerRef = useRef<AbortController | null>(null)
 
   // Load property statuses from localStorage on mount
   useEffect(() => {
@@ -114,6 +120,38 @@ export default function Home() {
     }
   }, [propertyMemos])
 
+  // Header scroll effect
+  useEffect(() => {
+    const handleScroll = () => {
+      const header = document.getElementById('header')
+      if (header) {
+        if (window.scrollY > 50) {
+          header.classList.add('scrolled')
+        } else {
+          header.classList.remove('scrolled')
+        }
+      }
+    }
+
+    // Initial check on mount
+    handleScroll()
+
+    window.addEventListener('scroll', handleScroll)
+    return () => window.removeEventListener('scroll', handleScroll)
+  }, [])
+
+  // Check header state on view change
+  useEffect(() => {
+    const header = document.getElementById('header')
+    if (header) {
+      if (currentView === 'search' && window.scrollY <= 50) {
+        header.classList.remove('scrolled')
+      } else {
+        header.classList.add('scrolled')
+      }
+    }
+  }, [currentView])
+
   // Search & Filter states (initialized from URL params)
   const [searchQuery, setSearchQuery] = useState(searchParams.get('q') || '')
   const [stationFilter, setStationFilter] = useState(searchParams.get('station') || '')
@@ -135,7 +173,7 @@ export default function Home() {
   const [selectedBuildingTypes, setSelectedBuildingTypes] = useState<string[]>(getArrayParam('buildingTypes'))
   const [selectedFeatures, setSelectedFeatures] = useState<string[]>(getArrayParam('features'))
   const [selectedStatuses, setSelectedStatuses] = useState<string[]>(
-    getArrayParam('statuses', ['none', 'candidate', 'maybe'])
+    getArrayParam('statuses', [])
   )
 
   // View options
@@ -148,6 +186,9 @@ export default function Home() {
 
   // Mobile filter modal state
   const [mobileFilterOpen, setMobileFilterOpen] = useState(false)
+
+  // Mobile menu state
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
 
   // Update URL when filters change
   useEffect(() => {
@@ -219,27 +260,54 @@ export default function Home() {
     fetchProperties()
   }, [])
 
-  // Re-fetch when sort changes
+  // Re-fetch when filters change (with debounce)
   useEffect(() => {
-    if (properties.length > 0) {
-      const filters = {
-        minRent,
-        maxRent,
-        minWalkTime,
-        maxWalkTime,
-        floorPlans: selectedFloorPlans
-      }
-      fetchProperties(searchQuery, filters)
-    }
-  }, [sortBy])
+    if (properties.length === 0) return // Skip on initial mount
 
-  const fetchProperties = async (query = '', filters: any = {}, page = currentPage) => {
+    const timeoutId = setTimeout(() => {
+      fetchProperties(true) // Reset to first page
+    }, 300) // 300ms debounce
+
+    return () => clearTimeout(timeoutId)
+  }, [
+    sortBy,
+    minRent,
+    maxRent,
+    minWalkTime,
+    maxWalkTime,
+    minArea,
+    maxArea,
+    minBuildingAge,
+    maxBuildingAge,
+    minFloor,
+    maxFloor,
+    selectedFloorPlans,
+    selectedBuildingTypes,
+    selectedFeatures,
+    stationFilter,
+    lineFilter,
+    walkMode,
+    hiddenProperties // Re-fetch when properties are hidden (exclude_ids changes)
+  ])
+
+  const fetchProperties = async (resetOffset = false) => {
+    // For reset searches (filter changes), abort previous request
+    if (resetOffset && searchAbortControllerRef.current) {
+      searchAbortControllerRef.current.abort()
+    }
+
+    // Create new AbortController for this request (only for reset searches)
+    const abortController = resetOffset ? new AbortController() : null
+    if (resetOffset) {
+      searchAbortControllerRef.current = abortController
+    }
+
     setLoading(true)
     try {
-      // Build URL with pagination and sort parameters
+      const currentOffset = resetOffset ? 0 : offset
+
+      // Build URL with all filter parameters
       const params = new URLSearchParams()
-      params.set('limit', propertiesPerPage.toString())
-      params.set('offset', ((page - 1) * propertiesPerPage).toString())
 
       // Map sortBy to API sort parameter
       const sortMapping: Record<SortOption, string> = {
@@ -255,23 +323,109 @@ export default function Home() {
       const apiSort = sortMapping[sortBy] || 'fetched_at'
       params.set('sort', apiSort)
 
-      const response = await fetch(`${API_URL}/api/properties?${params.toString()}`)
+      // Determine if cursor mode is available (only for newest sort)
+      const useCursorMode = sortBy === 'newest'
+
+      // Pagination
+      params.set('limit', limit.toString())
+
+      if (useCursorMode && !resetOffset && nextCursor) {
+        // Use cursor for load more (newest sort only)
+        params.set('cursor', nextCursor)
+      } else {
+        // Use offset for initial load or non-cursor sorts
+        params.set('offset', currentOffset.toString())
+      }
+
+      // Rent filter (API expects 万円)
+      if (minRent > 0) params.set('min_rent', minRent.toString())
+      if (maxRent < 100) params.set('max_rent', maxRent.toString())
+
+      // Walk time filter
+      if (minWalkTime > 0) params.set('min_walk', minWalkTime.toString())
+      if (maxWalkTime < 60) params.set('max_walk', maxWalkTime.toString())
+
+      // Area filter
+      if (minArea > 0) params.set('min_area', minArea.toString())
+      if (maxArea < 200) params.set('max_area', maxArea.toString())
+
+      // Building age filter
+      if (minBuildingAge > 0) params.set('min_building_age', minBuildingAge.toString())
+      if (maxBuildingAge < 50) params.set('max_building_age', maxBuildingAge.toString())
+
+      // Floor filter
+      if (minFloor > 1) params.set('min_floor', minFloor.toString())
+      if (maxFloor < 30) params.set('max_floor', maxFloor.toString())
+
+      // Floor plans (comma-separated)
+      if (selectedFloorPlans.length > 0) {
+        params.set('floor_plans', selectedFloorPlans.join(','))
+      }
+
+      // Building types (comma-separated)
+      if (selectedBuildingTypes.length > 0) {
+        params.set('building_types', selectedBuildingTypes.join(','))
+      }
+
+      // Features/Facilities (comma-separated)
+      if (selectedFeatures.length > 0) {
+        params.set('facilities', selectedFeatures.join(','))
+      }
+
+      // Station and line filters
+      if (stationFilter) params.set('station', stationFilter)
+      if (lineFilter) params.set('line', lineFilter)
+      if (walkMode) params.set('walk_mode', walkMode)
+
+      // Exclude IDs (hidden properties from localStorage) - max 300 to avoid URL length issues
+      const hiddenIds = Array.from(hiddenProperties).slice(0, 300)
+      if (hiddenIds.length > 0) {
+        params.set('exclude_ids', hiddenIds.join(','))
+      }
+
+      const response = await fetch(`${API_URL}/api/properties?${params.toString()}`, {
+        signal: abortController?.signal
+      })
+
+      // Check if request was aborted
+      if (abortController?.signal.aborted) {
+        return
+      }
+
       const data = await response.json()
 
-      // Handle both paginated and non-paginated responses
       if (data.properties && data.total !== undefined) {
-        // Paginated response
-        setProperties(data.properties)
-        setTotalProperties(data.total)
-        console.log('✅ Fetched properties:', data.properties.length, 'of', data.total, 'total, page:', page, 'sorted by:', apiSort)
+        // Server-side paginated response
+        if (resetOffset) {
+          setProperties(data.properties)
+          setOffset(0)
+          // Reset cursor on filter change
+          setNextCursor(data.next_cursor || null)
+        } else {
+          setProperties(prev => [...prev, ...data.properties])
+          // Update cursor for next load
+          setNextCursor(data.next_cursor || null)
+        }
+        setTotalCount(data.total)
+
+        // Determine if there's more data
+        if (data.next_cursor) {
+          setHasMore(true) // If cursor exists, there's more data
+        } else {
+          // For offset mode or end of cursor data, check manually
+          setHasMore(currentOffset + data.properties.length < data.total)
+        }
+
+        console.log('✅ Fetched properties:', data.properties.length, 'total:', data.total, 'offset:', currentOffset, 'cursor:', data.next_cursor ? 'yes' : 'no', 'excluded:', hiddenIds.length)
       } else {
-        // Legacy non-paginated response (fallback)
-        const propertiesArray = Array.isArray(data) ? data : (data.properties || [])
-        setProperties(propertiesArray)
-        setTotalProperties(propertiesArray.length)
-        console.log('✅ Fetched properties (legacy):', propertiesArray.length, 'sorted by:', apiSort)
+        console.error('Unexpected API response format:', data)
       }
     } catch (error) {
+      // Ignore abort errors (expected when cancelling requests)
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.log('🚫 Request aborted (filter changed)')
+        return
+      }
       console.error('Error fetching properties:', error)
     } finally {
       setLoading(false)
@@ -280,26 +434,15 @@ export default function Home() {
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault()
-    const filters = {
-      minRent,
-      maxRent,
-      minWalkTime,
-      maxWalkTime,
-      floorPlans: selectedFloorPlans
-    }
-    setCurrentPage(1) // Reset to first page on new search
-    fetchProperties(searchQuery, filters, 1)
+    fetchProperties(true) // Reset to first page
     setCurrentView('results')
-  }
-
-  const handlePageChange = (newPage: number) => {
-    setCurrentPage(newPage)
-    fetchProperties(searchQuery, {}, newPage)
-    window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   const handleResetFilters = () => {
     setSearchQuery('')
+    setStationFilter('')
+    setLineFilter('')
+    setWalkMode('nearest')
     setMinRent(0)
     setMaxRent(100)
     setSelectedFloorPlans([])
@@ -313,11 +456,12 @@ export default function Home() {
     setMaxFloor(30)
     setSelectedBuildingTypes([])
     setSelectedFeatures([])
-    setSelectedStatuses(['none', 'candidate', 'maybe'])
+    setSelectedStatuses([])
     setSortBy('newest')
     // Clear URL parameters
     router.replace('/?view=results', { scroll: false })
-    fetchProperties()
+    // Fetch from beginning
+    fetchProperties(true)
   }
 
   const toggleFloorPlan = (plan: string) => {
@@ -398,102 +542,12 @@ export default function Home() {
   const candidateCount = Object.values(propertyStatuses).filter(s => s === 'candidate').length
   const candidateProperties = properties.filter(p => propertyStatuses[p.id] === 'candidate')
 
-  // Filter properties (client-side filters for UI interactions)
-  const filteredAndSortedProperties = () => {
+  // Client-side filtering only for localStorage-based status (hidden properties now handled server-side)
+  const getDisplayedProperties = () => {
     let filtered = [...properties]
 
-    // Filter out hidden properties
-    filtered = filtered.filter(p => !hiddenProperties.has(p.id))
-
-    // Apply sidebar filters with range (client-side refinement)
-    filtered = filtered.filter(p => {
-      // Rent filter
-      if (p.rent) {
-        const rentInMan = p.rent / 10000
-        if (rentInMan < minRent || rentInMan > maxRent) return false
-      }
-
-      // Area filter
-      if (p.area) {
-        if (p.area < minArea || p.area > maxArea) return false
-      }
-
-      // Building age filter
-      if (p.building_age !== undefined) {
-        if (p.building_age < minBuildingAge || p.building_age > maxBuildingAge) return false
-      }
-
-      // Walk time filter
-      if (p.walk_time) {
-        if (p.walk_time < minWalkTime || p.walk_time > maxWalkTime) return false
-      }
-
-      // Floor filter
-      if (p.floor) {
-        if (p.floor < minFloor || p.floor > maxFloor) return false
-      }
-
-      return true
-    })
-
-    // Floor plan filter
-    if (selectedFloorPlans.length > 0) {
-      filtered = filtered.filter(p => p.floor_plan && selectedFloorPlans.includes(p.floor_plan))
-    }
-
-    // Building type filter
-    if (selectedBuildingTypes.length > 0) {
-      filtered = filtered.filter(p => p.building_type && selectedBuildingTypes.includes(p.building_type))
-    }
-
-    // Features filter
-    if (selectedFeatures.length > 0) {
-      filtered = filtered.filter(p => {
-        // Special handling for floor-based filters - check floor field instead of facilities
-        const hasFirstFloor = selectedFeatures.includes('first_floor')
-        const hasSecondFloorPlus = selectedFeatures.includes('second_floor_plus')
-        const hasTopFloor = selectedFeatures.includes('top_floor')
-        const floorFilters = ['first_floor', 'second_floor_plus', 'top_floor']
-        const otherFeatures = selectedFeatures.filter(f => !floorFilters.includes(f))
-
-        // Check floor requirements
-        if (hasFirstFloor) {
-          if (!p.floor || p.floor !== 1) {
-            return false
-          }
-        }
-        if (hasSecondFloorPlus) {
-          if (!p.floor || p.floor < 2) {
-            return false
-          }
-        }
-        if (hasTopFloor) {
-          // TODO: Need building total floors data to determine if this is top floor
-          // For now, just check if floor exists
-          if (!p.floor) {
-            return false
-          }
-        }
-
-        // Check other facility requirements
-        if (otherFeatures.length > 0) {
-          if (!p.facilities) return false
-          try {
-            const facilities = JSON.parse(p.facilities)
-            if (!Array.isArray(facilities)) return false
-            if (!otherFeatures.every(feature => facilities.includes(feature))) {
-              return false
-            }
-          } catch {
-            return false
-          }
-        }
-
-        return true
-      })
-    }
-
-    // Status filter
+    // Status filter (client-side only, stored in localStorage)
+    // Note: hidden properties are now excluded server-side via exclude_ids parameter
     if (selectedStatuses.length > 0) {
       filtered = filtered.filter(p => {
         const status = propertyStatuses[p.id] || 'none'
@@ -501,67 +555,171 @@ export default function Home() {
       })
     }
 
-    // Sorting is handled by API on the server (fetched with sort parameter)
+    // All other filtering and sorting is done server-side
     return filtered
   }
 
-  const displayedProperties = filteredAndSortedProperties()
+  const displayedProperties = getDisplayedProperties()
+
+  // Load more function for infinite scroll (offset-based pagination)
+  const loadMore = () => {
+    if (isLoadingMore || !hasMore) return
+    setIsLoadingMore(true)
+    setOffset(prev => prev + limit)
+  }
+
+  // Fetch more when offset changes
+  useEffect(() => {
+    if (offset > 0) {
+      fetchProperties(false).finally(() => setIsLoadingMore(false))
+    }
+  }, [offset])
+
+  // Infinite scroll observer
+  useEffect(() => {
+    if (currentView !== 'results') return
+
+    const handleScroll = () => {
+      // Check if user scrolled near bottom of page
+      const scrollHeight = document.documentElement.scrollHeight
+      const scrollTop = document.documentElement.scrollTop
+      const clientHeight = document.documentElement.clientHeight
+
+      // Trigger load more when user is within 500px of bottom
+      if (scrollHeight - scrollTop - clientHeight < 500) {
+        if (hasMore && !isLoadingMore) {
+          loadMore()
+        }
+      }
+    }
+
+    window.addEventListener('scroll', handleScroll)
+    return () => window.removeEventListener('scroll', handleScroll)
+  }, [currentView, hasMore, isLoadingMore])
 
   return (
     <div className="app">
-      <header className="header">
+      <header className={`header ${currentView === 'results' ? 'results-header' : ''}`} id="header">
         <div className="header-inner">
           <a href="#" className="logo" onClick={() => setCurrentView('search')}>shiboroom<span>.</span></a>
-          <nav className="nav">
-            <button
-              className={`nav-btn ${currentView === 'search' ? 'active' : ''}`}
-              onClick={() => setCurrentView('search')}
-            >
-              ホーム
-            </button>
-            <button
-              className={`nav-btn ${currentView === 'results' ? 'active' : ''}`}
-              onClick={() => setCurrentView('results')}
-            >
-              一覧
-            </button>
-            <button
-              className={`nav-btn ${currentView === 'compare' ? 'active' : ''}`}
-              onClick={() => setCurrentView('compare')}
-            >
-              比較
-            </button>
-          </nav>
-          <div className="header-actions">
-            <div className="count-badge">
-              <span className="item">全 <strong className="accent">{properties.length}</strong> 件</span>
-              <span className="item">候補 <strong className="candidate-count">{candidateCount}</strong> 件</span>
-            </div>
-            <a href="/admin" className="admin-link">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
-                <circle cx="12" cy="12" r="3"/>
-              </svg>
-            </a>
-          </div>
+          {(currentView === 'search' || currentView === 'compare') && (
+            <nav className="nav">
+              <a href="#" onClick={(e) => { e.preventDefault(); setCurrentView('results'); }}>物件一覧</a>
+              <a href="#" onClick={(e) => { e.preventDefault(); setCurrentView('compare'); }}>候補比較</a>
+              <a href="#" className="nav-login" onClick={(e) => { e.preventDefault(); alert('準備中'); }}>ログイン</a>
+            </nav>
+          )}
         </div>
       </header>
+
+      {/* Mobile Menu */}
+      <div className={`mobile-menu ${mobileMenuOpen ? 'open' : ''}`}>
+        <div className="mobile-menu-header">
+          <span className="mobile-menu-title">メニュー</span>
+          <button
+            className="mobile-menu-close"
+            onClick={() => setMobileMenuOpen(false)}
+            aria-label="メニューを閉じる"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <line x1="18" y1="6" x2="6" y2="18"/>
+              <line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+        <nav className="mobile-menu-nav">
+          <button
+            className={`mobile-menu-item ${currentView === 'search' ? 'active' : ''}`}
+            onClick={() => {
+              setCurrentView('search')
+              setMobileMenuOpen(false)
+            }}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+              <polyline points="9 22 9 12 15 12 15 22"/>
+            </svg>
+            <span>ホーム</span>
+          </button>
+          <button
+            className={`mobile-menu-item ${currentView === 'results' ? 'active' : ''}`}
+            onClick={() => {
+              setCurrentView('results')
+              setMobileMenuOpen(false)
+            }}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <line x1="8" y1="6" x2="21" y2="6"/>
+              <line x1="8" y1="12" x2="21" y2="12"/>
+              <line x1="8" y1="18" x2="21" y2="18"/>
+              <line x1="3" y1="6" x2="3.01" y2="6"/>
+              <line x1="3" y1="12" x2="3.01" y2="12"/>
+              <line x1="3" y1="18" x2="3.01" y2="18"/>
+            </svg>
+            <span>物件一覧</span>
+          </button>
+          <button
+            className={`mobile-menu-item ${currentView === 'compare' ? 'active' : ''}`}
+            onClick={() => {
+              setCurrentView('compare')
+              setMobileMenuOpen(false)
+            }}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <rect x="3" y="3" width="7" height="7"/>
+              <rect x="14" y="3" width="7" height="7"/>
+              <rect x="14" y="14" width="7" height="7"/>
+              <rect x="3" y="14" width="7" height="7"/>
+            </svg>
+            <span>候補比較</span>
+          </button>
+          <a href="/admin" className="mobile-menu-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
+              <circle cx="12" cy="12" r="3"/>
+            </svg>
+            <span>管理画面</span>
+          </a>
+        </nav>
+        <div className="mobile-menu-footer">
+          <div className="mobile-menu-stats">
+            <div className="mobile-menu-stat">
+              <span className="label">全物件</span>
+              <span className="value accent">{totalCount}件</span>
+            </div>
+            <div className="mobile-menu-stat">
+              <span className="label">候補</span>
+              <span className="value candidate">{candidateCount}件</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Mobile Menu Backdrop */}
+      <div
+        className={`mobile-menu-backdrop ${mobileMenuOpen ? 'open' : ''}`}
+        onClick={() => setMobileMenuOpen(false)}
+        aria-hidden="true"
+      />
 
       {/* Home View */}
       {currentView === 'search' && (
         <section className="lp-view active" id="home">
           {/* Hero Section */}
           <section className="lp-hero">
-            <div className="lp-hero-bg"></div>
+            {/* Background Image */}
+            <div className="lp-hero-bg">
+              <div className="lp-hero-bg-fallback"></div>
+              <img
+                src="/hero-room.jpg"
+                alt="モダンなリビングルーム"
+                className="lp-hero-bg-image"
+              />
+            </div>
+
             <div className="lp-hero-inner">
               <div className="lp-hero-content">
-                <span className="lp-hero-badge">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
-                    <polyline points="9 22 9 12 15 12 15 22"/>
-                  </svg>
-                  新しい賃貸検索
-                </span>
+                <p className="lp-hero-label">新しい賃貸検索</p>
                 <h1 className="lp-hero-title">
                   <span className="lp-hero-title-accent">気になる物件だけ</span>が<br />残る部屋探し
                 </h1>
@@ -570,17 +728,30 @@ export default function Home() {
                   検索するたびに候補が絞られていく、新しい体験です。
                 </p>
                 <p className="lp-hero-note">
-                  ※掲載料で上位が決まる検索ではなく、ユーザーの判断が中心の設計です。
+                  掲載料で上位が決まる検索ではなく、<br />
+                  あなたの判断が中心の設計です。
                 </p>
-                <button className="lp-hero-cta" onClick={() => {
-                  document.querySelector('.lp-cta')?.scrollIntoView({ behavior: 'smooth' });
-                }}>
-                  検索をはじめる
-                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M17 8l4 4m0 0l-4 4m4-4H3" />
-                  </svg>
+                <button className="lp-hero-cta" onClick={() => setCurrentView('results')}>
+                  物件一覧
                 </button>
               </div>
+            </div>
+
+            {/* Stats - Right Bottom */}
+            <div className="lp-hero-stats">
+              <div className="lp-stat-item">
+                <div className="lp-stat-value">2,400<span>+</span></div>
+                <div className="lp-stat-label">掲載物件</div>
+              </div>
+              <div className="lp-stat-item">
+                <div className="lp-stat-value">89<span>%</span></div>
+                <div className="lp-stat-label">満足度</div>
+              </div>
+            </div>
+
+            {/* Scroll Indicator */}
+            <div className="lp-scroll-indicator">
+              Scroll
             </div>
           </section>
 
@@ -810,10 +981,7 @@ export default function Home() {
               <h2 className="lp-cta-title">部屋探しをはじめる</h2>
               <div className="lp-cta-buttons">
                 <button className="lp-cta-btn" onClick={() => setCurrentView('results')}>
-                  検索をはじめる
-                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M17 8l4 4m0 0l-4 4m4-4H3" />
-                  </svg>
+                  物件一覧
                 </button>
               </div>
             </div>
@@ -830,23 +998,39 @@ export default function Home() {
             onClick={() => setMobileFilterOpen(true)}
             aria-label="フィルタを開く"
           >
-            ⚙️
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <line x1="4" y1="6" x2="20" y2="6"/>
+              <line x1="4" y1="12" x2="20" y2="12"/>
+              <line x1="4" y1="18" x2="20" y2="18"/>
+              <circle cx="8" cy="6" r="2" fill="currentColor"/>
+              <circle cx="16" cy="12" r="2" fill="currentColor"/>
+              <circle cx="12" cy="18" r="2" fill="currentColor"/>
+            </svg>
           </button>
 
           {/* Sidebar Filters */}
           <aside className={`sidebar ${mobileFilterOpen ? 'mobile-open' : ''}`}>
+            {/* Logo in Sidebar */}
+            <div className="sidebar-logo">
+              <a href="#" className="logo" onClick={(e) => { e.preventDefault(); setCurrentView('search'); }}>
+                shiboroom<span>.</span>
+              </a>
+            </div>
+
             {/* Mobile Close Button */}
             <button
               className="mobile-filter-close"
               onClick={() => setMobileFilterOpen(false)}
               aria-label="フィルタを閉じる"
             >
-              ✕
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <line x1="18" y1="6" x2="6" y2="18"/>
+                <line x1="6" y1="6" x2="18" y2="18"/>
+              </svg>
             </button>
 
             <div className="sidebar-header">
               <span className="sidebar-title">条件で絞り込み</span>
-              <button className="edit-search-btn" onClick={() => setCurrentView('search')}>検索条件を編集</button>
             </div>
             <div className="sidebar-content">
               <div className="filter-section">
@@ -1285,6 +1469,31 @@ export default function Home() {
                 <div className="filter-result-label">件がヒット</div>
               </div>
               <button className="reset-btn" onClick={handleResetFilters}>絞り込みをリセット</button>
+
+              {/* Action Buttons */}
+              <div className="sidebar-actions">
+                <button
+                  className="sidebar-action-btn compare-btn"
+                  onClick={() => setCurrentView('compare')}
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M9 12h6M9 16h6M9 8h6M3 3h18M3 21h18M3 3v18M21 3v18"/>
+                  </svg>
+                  候補を比較
+                  {Object.values(propertyStatuses).filter(s => s === 'candidate').length > 0 && (
+                    <span className="badge">{Object.values(propertyStatuses).filter(s => s === 'candidate').length}</span>
+                  )}
+                </button>
+                <button
+                  className="sidebar-action-btn login-btn"
+                  onClick={(e) => { e.preventDefault(); alert('準備中'); }}
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3"/>
+                  </svg>
+                  ログイン
+                </button>
+              </div>
             </div>
           </aside>
 
@@ -1370,71 +1579,22 @@ export default function Home() {
                   status={propertyStatuses[property.id] || 'none'}
                   onStatusChange={(status) => setPropertyStatus(property.id, status)}
                   onHide={() => hideProperty(property.id)}
-                  memo={propertyMemos[property.id] || ''}
-                  onMemoChange={(memo) => setPropertyMemo(property.id, memo)}
                 />
               ))}
             </div>
 
-            {/* Pagination Controls */}
-            {totalProperties > propertiesPerPage && (
-              <div className="pagination">
-                <div className="pagination-info">
-                  {totalProperties}件中 {((currentPage - 1) * propertiesPerPage) + 1}〜{Math.min(currentPage * propertiesPerPage, totalProperties)}件を表示
-                </div>
-                <div className="pagination-controls">
-                  <button
-                    className="pagination-btn"
-                    onClick={() => handlePageChange(currentPage - 1)}
-                    disabled={currentPage === 1}
-                  >
-                    前へ
-                  </button>
+            {/* Infinite Scroll - Loading Indicator */}
+            {hasMore && isLoadingMore && (
+              <div className="load-more-container">
+                <span className="loading"></span>
+                <div className="load-more-info">読み込み中...</div>
+              </div>
+            )}
 
-                  {(() => {
-                    const totalPages = Math.ceil(totalProperties / propertiesPerPage)
-                    const pages = []
-
-                    // Always show first page
-                    if (totalPages >= 1) pages.push(1)
-
-                    // Show ellipsis if needed
-                    if (currentPage > 3) pages.push(-1) // -1 represents ellipsis
-
-                    // Show pages around current page
-                    for (let i = Math.max(2, currentPage - 1); i <= Math.min(totalPages - 1, currentPage + 1); i++) {
-                      pages.push(i)
-                    }
-
-                    // Show ellipsis if needed
-                    if (currentPage < totalPages - 2) pages.push(-2) // -2 represents ellipsis
-
-                    // Always show last page
-                    if (totalPages > 1) pages.push(totalPages)
-
-                    return pages.map((page, index) => {
-                      if (page < 0) {
-                        return <span key={`ellipsis-${index}`} className="pagination-ellipsis">...</span>
-                      }
-                      return (
-                        <button
-                          key={page}
-                          className={`pagination-btn ${page === currentPage ? 'active' : ''}`}
-                          onClick={() => handlePageChange(page)}
-                        >
-                          {page}
-                        </button>
-                      )
-                    })
-                  })()}
-
-                  <button
-                    className="pagination-btn"
-                    onClick={() => handlePageChange(currentPage + 1)}
-                    disabled={currentPage === Math.ceil(totalProperties / propertiesPerPage)}
-                  >
-                    次へ
-                  </button>
+            {!hasMore && displayedProperties.length > 0 && (
+              <div className="load-more-container">
+                <div className="load-more-info">
+                  全{totalCount}件を表示しました
                 </div>
               </div>
             )}
@@ -1512,17 +1672,19 @@ export default function Home() {
         </section>
       )}
 
-      {/* Footer */}
-      <footer className="footer">
-        <div className="footer-inner">
-          <div className="footer-links">
-            <a href="/terms" className="footer-link">利用規約</a>
-            <a href="/privacy" className="footer-link">プライバシーポリシー</a>
-            <a href="/tokushoho" className="footer-link">特定商取引法に基づく表記</a>
+      {/* Footer - Only show on home page */}
+      {currentView === 'search' && (
+        <footer className="footer">
+          <div className="footer-inner">
+            <div className="footer-links">
+              <a href="/terms" className="footer-link">利用規約</a>
+              <a href="/privacy" className="footer-link">プライバシーポリシー</a>
+              <a href="/tokushoho" className="footer-link">特定商取引法に基づく表記</a>
+            </div>
+            <p className="footer-copy">© 2025 shiboroom</p>
           </div>
-          <p className="footer-copy">© 2025 shiboroom</p>
-        </div>
-      </footer>
+        </footer>
+      )}
     </div>
   )
 }
@@ -1532,37 +1694,16 @@ function PropertyCard({
   formatRent,
   status,
   onStatusChange,
-  onHide,
-  memo,
-  onMemoChange
+  onHide
 }: {
   property: Property
   formatRent: (rent?: number) => string | null
   status: PropertyStatus
   onStatusChange: (status: PropertyStatus) => void
   onHide: () => void
-  memo: string
-  onMemoChange: (memo: string) => void
 }) {
   const [imageError, setImageError] = useState(false)
-  const [showMemoInput, setShowMemoInput] = useState(false)
-  const [memoText, setMemoText] = useState(memo)
   const router = useRouter()
-
-  // Sync local state when prop changes
-  useEffect(() => {
-    setMemoText(memo)
-  }, [memo])
-
-  const handleMemoSave = () => {
-    onMemoChange(memoText)
-    setShowMemoInput(false)
-  }
-
-  const handleMemoCancel = () => {
-    setMemoText(memo)
-    setShowMemoInput(false)
-  }
 
   const handleCardClick = (e: React.MouseEvent) => {
     // Don't navigate if clicking on buttons
@@ -1634,86 +1775,32 @@ function PropertyCard({
             className={`status-btn candidate ${status === 'candidate' ? 'active' : ''}`}
             onClick={() => onStatusChange('candidate')}
           >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 6 9 17l-5-5"/></svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+            </svg>
             候補
           </button>
           <button
             className={`status-btn maybe ${status === 'maybe' ? 'active' : ''}`}
             onClick={() => onStatusChange('maybe')}
           >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg>
-            微妙
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M12 8v4"/>
+              <path d="M12 16h.01"/>
+            </svg>
+            保留
           </button>
           <button
             className={`status-btn exclude ${status === 'excluded' ? 'active' : ''}`}
             onClick={() => onStatusChange('excluded')}
           >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
-            除外
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M1 1l22 22"/>
+              <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
+            </svg>
+            非表示
           </button>
-        </div>
-
-        {/* Memo Section */}
-        <div className="property-memo-section">
-          {!showMemoInput && !memo && (
-            <button
-              className="memo-add-btn"
-              onClick={(e) => {
-                e.stopPropagation()
-                setShowMemoInput(true)
-              }}
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-              </svg>
-              メモを追加
-            </button>
-          )}
-
-          {!showMemoInput && memo && (
-            <div className="property-memo-display" onClick={(e) => {
-              e.stopPropagation()
-              setShowMemoInput(true)
-            }}>
-              <div className="memo-display-header">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-                  <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-                </svg>
-                <span>メモ</span>
-              </div>
-              <p className="memo-display-text">{memo}</p>
-            </div>
-          )}
-
-          {showMemoInput && (
-            <div className="property-memo-input" onClick={(e) => e.stopPropagation()}>
-              <textarea
-                className="memo-textarea"
-                value={memoText}
-                onChange={(e) => setMemoText(e.target.value)}
-                placeholder="メモを入力（却下理由・内見メモなど）"
-                rows={3}
-                autoFocus
-              />
-              <div className="memo-actions">
-                <button className="memo-save-btn" onClick={handleMemoSave}>
-                  保存
-                </button>
-                <button className="memo-cancel-btn" onClick={handleMemoCancel}>
-                  キャンセル
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-
-        <div className="property-footer">
-          <a href={property.detail_url} className="external-link" target="_blank" rel="noreferrer">
-            Yahoo不動産で詳細を見る
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" x2="21" y1="14" y2="3"/></svg>
-          </a>
         </div>
       </div>
     </article>
