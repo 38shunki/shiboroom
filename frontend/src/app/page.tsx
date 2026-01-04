@@ -1504,7 +1504,11 @@ export default function Home() {
                   {loading ? (
                     <><span className="loading"></span> 読み込み中...</>
                   ) : (
-                    `${displayedProperties.length}件の物件`
+                    <>
+                      <span className="count-primary">{displayedProperties.length}件</span>
+                      <span className="count-separator">/</span>
+                      <span className="count-total">全{totalCount}件</span>
+                    </>
                   )}
                 </div>
               </div>

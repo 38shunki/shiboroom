@@ -1428,11 +1428,24 @@ body {
   gap: 12px;
 }
 .search-status {
-  font-size: 13px;
+  font-size: 14px;
   color: var(--text-secondary);
   display: flex;
   align-items: center;
   gap: 8px;
+}
+.search-status .count-primary {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.search-status .count-separator {
+  color: var(--border-strong);
+  margin: 0 4px;
+}
+.search-status .count-total {
+  font-size: 13px;
+  color: var(--text-secondary);
 }
 .search-status .loading {
   display: inline-block;
