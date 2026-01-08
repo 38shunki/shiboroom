@@ -403,6 +403,7 @@ func (s *Scraper) fetchHTMLWithHeadlessBrowser(url string) (string, error) {
 
 	// Chrome execution options for systemd compatibility
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.ExecPath("/usr/bin/google-chrome"), // Use Google Chrome
 		chromedp.Flag("headless", true),
 		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("no-sandbox", true), // Required for systemd/Docker
@@ -801,8 +802,10 @@ func extractPropertyDataFromHTML(htmlString string) map[string]interface{} {
 	// Extract RoomLayoutImageUrl (間取り図URL)
 	if re := regexp.MustCompile(`"RoomLayoutImageUrl"\s*:\s*"([^"]+)"`); re != nil {
 		if matches := re.FindStringSubmatch(contextSection); len(matches) > 1 {
-			result["RoomLayoutImageUrl"] = matches[1]
-			log.Printf("[extractPropertyDataFromHTML] Found RoomLayoutImageUrl: %s", matches[1])
+			// Unescape JSON string (remove \/ escapes)
+			unescapedURL := strings.ReplaceAll(matches[1], `\/`, `/`)
+			result["RoomLayoutImageUrl"] = unescapedURL
+			log.Printf("[extractPropertyDataFromHTML] Found RoomLayoutImageUrl: %s", unescapedURL)
 		}
 	}
 
@@ -2056,37 +2059,90 @@ func extractExternalImageFromJSON(html string) string {
 	return ""
 }
 
-// extractAllImageURLsFromJSON extracts all image URLs from embedded JSON data
-// Returns an array of image URLs from the PhotoUrlList or similar fields
+// extractAllImageURLsFromJSON extracts all image URLs from embedded JSON data and HTML
+// Returns an array of image URLs from realestate-pctr domain (deduplicated and limited to ~20 images)
 func extractAllImageURLsFromJSON(html string) []string {
 	var imageURLs []string
 
-	// Pattern 1: PhotoUrlList array - "PhotoUrlList":[{"Url":"https://..."}]
-	photoListRe := regexp.MustCompile(`"PhotoUrlList"\s*:\s*\[(.*?)\]`)
-	if matches := photoListRe.FindStringSubmatch(html); len(matches) > 1 {
-		// Extract individual URLs from the array
+	// Extract all realestate-pctr image URLs from HTML (both JSON and img tags)
+	// This pattern matches the full URL format used by Yahoo Real Estate
+	imgPattern := regexp.MustCompile(`https://realestate-pctr\.c\.yimg\.jp/[A-Za-z0-9_\-]+`)
+	matches := imgPattern.FindAllString(html, -1)
+
+	// Use URL signature (chars 150-350) to identify unique images
+	// Same image in different sizes/crops shares this middle section of the URL
+	seenSignatures := make(map[string]bool)
+	seenURLs := make(map[string]bool)
+
+	for _, url := range matches {
+		// Unescape if needed
+		cleanURL := strings.ReplaceAll(url, `\/`, `/`)
+
+		// Skip if we've seen this exact URL
+		if seenURLs[cleanURL] {
+			continue
+		}
+		seenURLs[cleanURL] = true
+
+		// Extract signature from middle of URL (chars 140-240)
+		// This part identifies the actual image, while the end varies for different sizes
+		var signature string
+		if len(cleanURL) > 240 {
+			signature = cleanURL[140:240]
+		} else if len(cleanURL) > 140 {
+			signature = cleanURL[140:]
+		} else {
+			signature = cleanURL
+		}
+
+		// Only add if we haven't seen this image signature before
+		if !seenSignatures[signature] {
+			imageURLs = append(imageURLs, cleanURL)
+			seenSignatures[signature] = true
+
+			// Limit to ~20 unique images (typical for Yahoo Real Estate properties)
+			if len(imageURLs) >= 20 {
+				break
+			}
+		}
+	}
+
+	log.Printf("[extractAllImageURLsFromJSON] Found %d unique images (from %d total URLs, %d completely unique)", len(imageURLs), len(matches), len(seenURLs))
+
+	// If we found images, return them
+	if len(imageURLs) > 0 {
+		return imageURLs
+	}
+
+	// Fallback: Try extracting from ResizedExternalImageUrls JSON field
+	resizedExternalRe := regexp.MustCompile(`"ResizedExternalImageUrls"\s*:\s*\[([^\]]+)\]`)
+	if matches := resizedExternalRe.FindStringSubmatch(html); len(matches) > 1 {
+		log.Printf("[extractAllImageURLsFromJSON] Fallback: Found ResizedExternalImageUrls, extracting URLs...")
 		urlRe := regexp.MustCompile(`"Url"\s*:\s*"([^"]+)"`)
 		urlMatches := urlRe.FindAllStringSubmatch(matches[1], -1)
 		for _, urlMatch := range urlMatches {
 			if len(urlMatch) > 1 {
 				imageURL := strings.ReplaceAll(urlMatch[1], `\/`, `/`)
-				imageURLs = append(imageURLs, imageURL)
+				if !seenURLs[imageURL] {
+					imageURLs = append(imageURLs, imageURL)
+					seenURLs[imageURL] = true
+				}
 			}
 		}
-		if len(imageURLs) > 0 {
-			log.Printf("[extractAllImageURLsFromJSON] Found %d images from PhotoUrlList", len(imageURLs))
-			return imageURLs
+	}
+
+	// Final fallback: ExternalImageUrl (single image)
+	if len(imageURLs) == 0 {
+		if externalImageURL := extractExternalImageFromJSON(html); externalImageURL != "" {
+			imageURLs = append(imageURLs, externalImageURL)
+			log.Printf("[extractAllImageURLsFromJSON] Fallback: Found 1 image from ExternalImageUrl")
 		}
 	}
 
-	// Pattern 2: ExternalImageUrl (fallback for single image)
-	if externalImageURL := extractExternalImageFromJSON(html); externalImageURL != "" {
-		imageURLs = append(imageURLs, externalImageURL)
-		log.Printf("[extractAllImageURLsFromJSON] Found 1 image from ExternalImageUrl")
-		return imageURLs
+	if len(imageURLs) == 0 {
+		log.Printf("[extractAllImageURLsFromJSON] No images found")
 	}
 
-	log.Printf("[extractAllImageURLsFromJSON] No images found in JSON")
 	return imageURLs
 }
 
